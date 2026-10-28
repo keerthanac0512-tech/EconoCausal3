@@ -1,0 +1,16 @@
+test_name,method_name,original_effect,refutation_result,status
+Random Common Cause,random_common_cause,0.1994964559091968,"Refute: Add a random common cause
+Estimated effect:0.1994964559091968
+New effect:0.1994935867696292
+p value:0.9199999999999999
+",Completed
+Placebo Treatment,placebo_treatment_refuter,0.1994964559091968,"Refute: Use a Placebo Treatment
+Estimated effect:0.1994964559091968
+New effect:-5.495603971894525e-14
+p value:0.0
+",Completed
+Data Subset,data_subset_refuter,0.1994964559091968,"Refute: Use a subset of data
+Estimated effect:0.1994964559091968
+New effect:0.1994290826296382
+p value:1.0
+",Completed

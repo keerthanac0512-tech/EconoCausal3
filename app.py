@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from io import BytesIO
 
@@ -86,10 +87,16 @@ def treatment_effects():
         })
 
     except FileNotFoundError as error:
-        return jsonify({"status": "error", "message": str(error)}), 404
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
 
     except (ValueError, pd.errors.ParserError) as error:
-        return jsonify({"status": "error", "message": str(error)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
 
 
 # --------------------------------------------------
@@ -109,10 +116,16 @@ def budget_results():
         })
 
     except FileNotFoundError as error:
-        return jsonify({"status": "error", "message": str(error)}), 404
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
 
     except (ValueError, pd.errors.ParserError) as error:
-        return jsonify({"status": "error", "message": str(error)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
 
 
 # --------------------------------------------------
@@ -132,10 +145,16 @@ def uplift_results():
         })
 
     except FileNotFoundError as error:
-        return jsonify({"status": "error", "message": str(error)}), 404
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
 
     except (ValueError, pd.errors.ParserError) as error:
-        return jsonify({"status": "error", "message": str(error)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
 
 
 # --------------------------------------------------
@@ -221,14 +240,15 @@ def optimize_budget():
     try:
         budget = validate_budget(payload["budget"])
 
-        # This prototype assumes that choosing the higher discount
-        # costs an additional $10 per selected customer.
+        # Assumption: higher discount costs an additional $10
+        # per selected customer.
         extra_discount_cost = 10.0
         max_customers = int(budget // extra_discount_cost)
 
         df = load_csv("dml_treatment_effects_v2.csv")
 
         missing = REQUIRED_DML_COLUMNS - set(df.columns)
+
         if missing:
             return jsonify({
                 "status": "error",
@@ -239,29 +259,39 @@ def optimize_budget():
             }), 500
 
         df["estimated_treatment_effect"] = pd.to_numeric(
-            df["estimated_treatment_effect"], errors="coerce"
+            df["estimated_treatment_effect"],
+            errors="coerce"
         )
 
-        df = df.dropna(subset=["estimated_treatment_effect"])
+        df = df.dropna(
+            subset=["estimated_treatment_effect"]
+        )
 
-        # Select the largest positive estimated effects first.
+        # Select largest positive estimated effects first.
         eligible = df[
             df["estimated_treatment_effect"] > 0
         ].sort_values(
-            "estimated_treatment_effect", ascending=False
+            "estimated_treatment_effect",
+            ascending=False
         )
 
         selected = eligible.head(max_customers).copy()
+
         selected["recommended_discount"] = 20
         selected["additional_discount_cost"] = extra_discount_cost
 
         selected_indices = set(selected.index)
-        remaining = df.loc[~df.index.isin(selected_indices)].copy()
+
+        remaining = df.loc[
+            ~df.index.isin(selected_indices)
+        ].copy()
+
         remaining["recommended_discount"] = 10
         remaining["additional_discount_cost"] = 0.0
 
         allocation = pd.concat(
-            [selected, remaining], ignore_index=True
+            [selected, remaining],
+            ignore_index=True
         )
 
         spent = len(selected) * extra_discount_cost
@@ -279,7 +309,8 @@ def optimize_budget():
             ),
             "data": records_from_dataframe(
                 allocation.sort_values(
-                    "estimated_treatment_effect", ascending=False
+                    "estimated_treatment_effect",
+                    ascending=False
                 ),
                 limit=100
             ),
@@ -290,13 +321,76 @@ def optimize_budget():
         })
 
     except ValueError as error:
-        return jsonify({"status": "error", "message": str(error)}), 400
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 400
 
     except FileNotFoundError as error:
-        return jsonify({"status": "error", "message": str(error)}), 404
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
 
     except (pd.errors.ParserError, KeyError) as error:
-        return jsonify({"status": "error", "message": str(error)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
+
+
+# --------------------------------------------------
+# Route 7: Targeting strategy comparison
+# --------------------------------------------------
+
+@app.route("/api/targeting-comparison", methods=["GET"])
+def targeting_comparison():
+    try:
+        df = load_csv("targeting_strategy_comparison.csv")
+
+        required_columns = {
+            "strategy",
+            "customers_selected",
+            "estimated_extra_cost",
+            "estimated_incremental_outcome",
+            "within_budget",
+            "estimated_outcome_per_dollar",
+            "estimated_cost_avoided_vs_blanket"
+        }
+
+        missing = required_columns - set(df.columns)
+
+        if missing:
+            return jsonify({
+                "status": "error",
+                "message": (
+                    "Comparison dataset is missing columns: "
+                    + ", ".join(sorted(missing))
+                )
+            }), 500
+
+        return jsonify({
+            "status": "success",
+            "total_records": len(df),
+            "columns": df.columns.tolist(),
+            "data": records_from_dataframe(df, limit=100),
+            "note": (
+                "All outcomes and cost comparisons are model-based "
+                "estimates, not verified real-world results."
+            )
+        })
+
+    except FileNotFoundError as error:
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
+
+    except (ValueError, pd.errors.ParserError) as error:
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 500
 
 
 # --------------------------------------------------
@@ -316,4 +410,8 @@ def file_too_large(_error):
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True
+    )

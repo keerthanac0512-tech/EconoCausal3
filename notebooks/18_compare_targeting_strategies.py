@@ -1,11 +1,5 @@
 from pathlib import Path
-
 import pandas as pd
-
-
-# --------------------------------------------------
-# Configuration
-# --------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

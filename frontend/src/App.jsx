@@ -13,6 +13,10 @@ function App() {
   const [upliftData, setUpliftData] = useState([]);
   const [dmlData, setDmlData] = useState([]);
 
+  const [comparisonData, setComparisonData] = useState([]);
+  const [comparisonLoading, setComparisonLoading] = useState(true);
+  const [comparisonError, setComparisonError] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -30,6 +34,7 @@ function App() {
     "Budget Optimization",
     "Causal Analysis",
     "Uplift Analysis",
+    "Targeting Comparison",
   ];
 
   // Load saved model results from the Flask backend.
@@ -119,6 +124,69 @@ function App() {
     }
 
     loadData();
+  }, []);
+
+  // Load targeting strategy comparison separately so a comparison API
+  // error does not prevent the existing dashboard modules from loading.
+  useEffect(() => {
+    async function loadComparison() {
+      try {
+        setComparisonLoading(true);
+        setComparisonError("");
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/targeting-comparison`
+        );
+
+        const result = await response.json();
+
+        if (!response.ok || result.status !== "success") {
+          throw new Error(
+            result.message || "Unable to load targeting comparison."
+          );
+        }
+
+        const parsedRows = (result.data || [])
+          .map((row) => ({
+            strategy: String(row.strategy || ""),
+            customers_selected: Number(row.customers_selected),
+            estimated_extra_cost: Number(row.estimated_extra_cost),
+            estimated_incremental_outcome: Number(
+              row.estimated_incremental_outcome
+            ),
+            within_budget:
+              row.within_budget === true ||
+              String(row.within_budget).toLowerCase() === "true",
+            estimated_outcome_per_dollar: Number(
+              row.estimated_outcome_per_dollar
+            ),
+            estimated_cost_avoided_vs_blanket: Number(
+              row.estimated_cost_avoided_vs_blanket
+            ),
+          }))
+          .filter(
+            (row) =>
+              row.strategy &&
+              Number.isFinite(row.customers_selected) &&
+              Number.isFinite(row.estimated_extra_cost) &&
+              Number.isFinite(row.estimated_incremental_outcome)
+          );
+
+        if (!parsedRows.length) {
+          throw new Error("The comparison API returned no usable records.");
+        }
+
+        setComparisonData(parsedRows);
+      } catch (error) {
+        setComparisonError(
+          `${error.message} Check that Flask is running.`
+        );
+      } finally {
+        setComparisonLoading(false);
+      }
+    }
+
+    loadComparison();
   }, []);
 
   // Upload a selected CSV to Flask.
@@ -342,6 +410,11 @@ function App() {
               title: "Uplift Analysis",
               description: "Inspect uplift and Qini evaluation.",
               icon: "⌁",
+            },
+            {
+              title: "Targeting Comparison",
+              description: "Compare blanket, causal and random targeting.",
+              icon: "⇄",
             },
           ].map((module) => (
             <button
@@ -880,6 +953,180 @@ function App() {
     );
   }
 
+  function renderTargetingComparison() {
+    const blanket = comparisonData.find(
+      (row) => row.strategy.toLowerCase().includes("blanket")
+    );
+    const causal = comparisonData.find(
+      (row) => row.strategy.toLowerCase().includes("causal")
+    );
+    const random = comparisonData.find(
+      (row) => row.strategy.toLowerCase().includes("random")
+    );
+
+    const formatMoney = (value) =>
+      Number.isFinite(value)
+        ? `$${value.toLocaleString("en-US", {
+            maximumFractionDigits: 2,
+          })}`
+        : "—";
+
+    const formatNumber = (value) =>
+      Number.isFinite(value) ? value.toFixed(4) : "—";
+
+    const costDifference = causal
+      ? causal.estimated_cost_avoided_vs_blanket
+      : null;
+
+    const causalVsRandom =
+      causal && random
+        ? causal.estimated_incremental_outcome -
+          random.estimated_incremental_outcome
+        : null;
+
+    const chartRows = comparisonData;
+
+    return (
+      <section className="content-card">
+        <h2>Targeting Strategy Comparison</h2>
+        <p>
+          Compare model-estimated outcomes and assumed additional costs
+          across blanket, causal and random targeting.
+        </p>
+
+        {comparisonLoading ? (
+          <div className="info-box">Loading targeting comparison...</div>
+        ) : comparisonError ? (
+          <div className="info-box">
+            <strong>Unable to load comparison</strong>
+            <p>{comparisonError}</p>
+          </div>
+        ) : (
+          <>
+            <section className="metric-grid">
+              <article className="metric-card">
+                <span>Blanket Targeting Cost</span>
+                <h3>{formatMoney(blanket?.estimated_extra_cost)}</h3>
+                <p>
+                  {blanket?.customers_selected.toLocaleString("en-US") ?? "—"}{" "}
+                  customers selected
+                </p>
+              </article>
+
+              <article className="metric-card">
+                <span>Causal Targeting Cost</span>
+                <h3>{formatMoney(causal?.estimated_extra_cost)}</h3>
+                <p>
+                  {causal?.customers_selected.toLocaleString("en-US") ?? "—"}{" "}
+                  customers selected
+                </p>
+              </article>
+
+              <article className="metric-card">
+                <span>Estimated Cost Difference vs Blanket</span>
+                <h3>{formatMoney(costDifference)}</h3>
+                <p>Based on the comparison dataset's cost assumption</p>
+              </article>
+
+              <article className="metric-card">
+                <span>Causal vs Random Estimated Outcome</span>
+                <h3>{formatNumber(causalVsRandom)}</h3>
+                <p>Difference in estimated incremental outcomes</p>
+              </article>
+            </section>
+
+            <h3>Strategy results</h3>
+            <div className="table-wrapper">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>Customers Selected</th>
+                    <th>Estimated Additional Cost</th>
+                    <th>Estimated Incremental Outcome</th>
+                    <th>Outcome per Dollar</th>
+                    <th>Within Budget</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisonData.map((row) => (
+                    <tr key={row.strategy}>
+                      <td>{row.strategy}</td>
+                      <td>
+                        {row.customers_selected.toLocaleString("en-US")}
+                      </td>
+                      <td>{formatMoney(row.estimated_extra_cost)}</td>
+                      <td>
+                        {formatNumber(row.estimated_incremental_outcome)}
+                      </td>
+                      <td>
+                        {formatNumber(row.estimated_outcome_per_dollar)}
+                      </td>
+                      <td>{row.within_budget ? "Yes" : "No"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Estimated incremental outcome by strategy</h3>
+            <div className="chart-placeholder">
+              <Plot
+                data={[
+                  {
+                    x: chartRows.map((row) => row.strategy),
+                    y: chartRows.map(
+                      (row) => row.estimated_incremental_outcome
+                    ),
+                    type: "bar",
+                    name: "Estimated incremental outcome",
+                    hovertemplate:
+                      "%{x}<br>Estimated outcome: %{y:.4f}<extra></extra>",
+                  },
+                ]}
+                layout={{
+                  autosize: true,
+                  title: "Targeting Strategy Outcomes",
+                  paper_bgcolor: "rgba(0,0,0,0)",
+                  plot_bgcolor: "rgba(0,0,0,0)",
+                  font: { color: "#dce5f5" },
+                  margin: { t: 50, r: 25, b: 80, l: 65 },
+                  xaxis: {
+                    title: "Targeting strategy",
+                    gridcolor: "rgba(148,163,184,0.15)",
+                  },
+                  yaxis: {
+                    title: "Estimated incremental outcome",
+                    gridcolor: "rgba(148,163,184,0.15)",
+                  },
+                }}
+                useResizeHandler
+                style={{ width: "100%", height: "400px" }}
+                config={{ responsive: true, displaylogo: false }}
+              />
+            </div>
+
+            <div className="info-box">
+              <strong>How to interpret these results</strong>
+              <p>
+                These values are model-based estimates from the saved
+                comparison dataset. They are not verified purchases,
+                revenue, profit or realized savings.
+              </p>
+              <p>
+                The cost comparison assumes an additional $10 cost for
+                each customer receiving the higher discount. The blanket
+                strategy applies that higher discount to every evaluated
+                customer, while causal and random targeting select
+                budget-matched groups.
+              </p>
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
+
   function renderPage() {
     if (activePage === "Dashboard") return renderDashboard();
     if (activePage === "Campaign Data") return renderCampaignData();
@@ -888,6 +1135,9 @@ function App() {
     }
     if (activePage === "Causal Analysis") return renderCausalAnalysis();
     if (activePage === "Uplift Analysis") return renderUpliftAnalysis();
+    if (activePage === "Targeting Comparison") {
+      return renderTargetingComparison();
+    }
 
     return renderDashboard();
   }
@@ -915,7 +1165,7 @@ function App() {
               onClick={() => setActivePage(page)}
             >
               <span className="nav-icon">
-                {["▦", "↑", "◈", "◎", "⌁"][index]}
+                {["▦", "↑", "◈", "◎", "⌁", "⇄"][index]}
               </span>
               {page}
             </button>

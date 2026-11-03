@@ -6,6 +6,8 @@ import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from src.drift_detection import detect_data_drift
+
 # --------------------------------------------------
 # Application setup
 # --------------------------------------------------
@@ -221,7 +223,9 @@ def upload_campaign():
             "status": "error",
             "message": f"Could not read the CSV: {error}"
         }), 400
-       # --------------------------------------------------
+
+
+# --------------------------------------------------
 # Route 5A: Campaign Data Quality Analysis
 # --------------------------------------------------
 
@@ -646,6 +650,95 @@ def targeting_comparison():
             "status": "error",
             "message": str(error)
         }), 500
+
+
+# --------------------------------------------------
+# Route 8: Data Drift Detection
+# --------------------------------------------------
+
+@app.route("/api/data-drift", methods=["POST"])
+def data_drift():
+    """
+    Compare an uploaded campaign dataset with the
+    historical reference dataset.
+    """
+
+    if "file" not in request.files:
+        return jsonify({
+            "status": "error",
+            "message": "Please upload a CSV using the 'file' field."
+        }), 400
+
+    file = request.files["file"]
+
+    if not file.filename:
+        return jsonify({
+            "status": "error",
+            "message": "Please select a CSV file."
+        }), 400
+
+    if Path(file.filename).suffix.lower() != ".csv":
+        return jsonify({
+            "status": "error",
+            "message": "Only CSV files are supported."
+        }), 400
+
+    try:
+        current_df = pd.read_csv(BytesIO(file.read()))
+
+        if current_df.empty:
+            return jsonify({
+                "status": "error",
+                "message": "The uploaded CSV contains no data rows."
+            }), 400
+
+        if current_df.columns.duplicated().any():
+            return jsonify({
+                "status": "error",
+                "message": "The CSV contains duplicate column names."
+            }), 400
+
+        reference_filename = "causal_dataset_synthetic_v2.csv"
+        reference_df = load_csv(reference_filename)
+
+        report = detect_data_drift(reference_df, current_df)
+
+        return jsonify({
+            "status": "success",
+            "message": "Data drift analysis completed.",
+            "filename": Path(file.filename).name,
+            "reference_dataset": reference_filename,
+            "report": report
+        }), 200
+
+    except FileNotFoundError as error:
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
+
+    except (
+        UnicodeDecodeError,
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+        ValueError
+    ) as error:
+        return jsonify({
+            "status": "error",
+            "message": f"Unable to perform drift analysis: {error}"
+        }), 400
+
+    except Exception:
+        app.logger.exception("Data drift analysis failed.")
+        return jsonify({
+            "status": "error",
+            "message": "An unexpected error occurred during drift analysis."
+        }), 500
+
+
+# --------------------------------------------------
+# End Route 8
+# --------------------------------------------------
 
 
 # --------------------------------------------------

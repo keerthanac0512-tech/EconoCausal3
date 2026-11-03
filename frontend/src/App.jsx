@@ -24,6 +24,11 @@ function App() {
   const [uploadResult, setUploadResult] = useState(null);
   const [uploadError, setUploadError] = useState("");
 
+  const [driftFile, setDriftFile] = useState(null);
+  const [driftLoading, setDriftLoading] = useState(false);
+  const [driftResult, setDriftResult] = useState(null);
+  const [driftError, setDriftError] = useState("");
+
   const [optimizing, setOptimizing] = useState(false);
   const [budgetResult, setBudgetResult] = useState(null);
   const [budgetError, setBudgetError] = useState("");
@@ -35,6 +40,7 @@ function App() {
     "Causal Analysis",
     "Uplift Analysis",
     "Targeting Comparison",
+    "Data Drift",
   ];
 
   // Load saved model results from the Flask backend.
@@ -235,6 +241,43 @@ function App() {
     }
   }
 
+  // Upload a new campaign CSV and compare it with the saved reference dataset.
+  async function handleDataDrift() {
+    setDriftError("");
+    setDriftResult(null);
+
+    if (!driftFile) {
+      setDriftError("Please choose a CSV file first.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", driftFile);
+
+    try {
+      setDriftLoading(true);
+
+      const response = await fetch(`${API_BASE_URL}/api/data-drift`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || result.status !== "success") {
+        throw new Error(result.message || "Data drift analysis failed.");
+      }
+
+      setDriftResult(result);
+    } catch (error) {
+      setDriftError(
+        `${error.message} Check that the Flask backend is running.`
+      );
+    } finally {
+      setDriftLoading(false);
+    }
+  }
+
   // Request budget optimization from Flask.
   async function handleOptimizeBudget() {
     setBudgetError("");
@@ -416,6 +459,11 @@ function App() {
               description: "Compare blanket, causal and random targeting.",
               icon: "⇄",
             },
+            {
+              title: "Data Drift",
+              description: "Monitor changes in incoming campaign data.",
+              icon: "⌁",
+            },
           ].map((module) => (
             <button
               className="module-card"
@@ -530,6 +578,155 @@ function App() {
             treatment effects for the new data.
           </p>
         </div>
+      </section>
+    );
+  }
+
+  function renderDataDrift() {
+    const report = driftResult?.report;
+    const featureResults = report?.results
+      ? Object.entries(report.results)
+      : [];
+
+    const statusLabel = report?.overall_status || "Not analysed";
+    const statusClass =
+      statusLabel === "Stable"
+        ? "drift-status-stable"
+        : statusLabel === "Drift Detected"
+          ? "drift-status-detected"
+          : "drift-status-warning";
+
+    const formatMetric = (value) =>
+      value == null || !Number.isFinite(Number(value))
+        ? "—"
+        : Number(value).toFixed(4);
+
+    return (
+      <section className="content-card">
+        <h2>Data Drift Detection</h2>
+        <p>
+          Upload a new campaign CSV to compare its feature distributions
+          against the saved reference dataset.
+        </p>
+
+        <label className="upload-area">
+          <div className="upload-symbol">↑</div>
+          <h3>Choose campaign CSV</h3>
+          <p>
+            {driftFile
+              ? `Selected file: ${driftFile.name}`
+              : "Select the latest campaign data to analyse."}
+          </p>
+          <span className="upload-button">Browse CSV Files</span>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(event) => {
+              const selectedFile = event.target.files?.[0] || null;
+              setDriftFile(selectedFile);
+              setDriftResult(null);
+              setDriftError("");
+            }}
+            disabled={driftLoading}
+          />
+        </label>
+
+        <button
+          className="primary-button"
+          onClick={handleDataDrift}
+          disabled={driftLoading || !driftFile}
+        >
+          {driftLoading ? "Analysing data..." : "Detect Data Drift"}
+        </button>
+
+        {driftError && (
+          <div className="info-box">
+            <strong>Drift analysis failed</strong>
+            <p>{driftError}</p>
+          </div>
+        )}
+
+        {driftResult && report && (
+          <>
+            <div className="info-box">
+              <strong>Analysis completed</strong>
+              <p>{driftResult.message}</p>
+              <p>
+                Uploaded file: {driftResult.filename || driftFile?.name}
+              </p>
+              <p>
+                Reference dataset: {driftResult.reference_dataset || "—"}
+              </p>
+            </div>
+
+            <section className="metric-grid">
+              <article className="metric-card">
+                <span>Overall Drift Status</span>
+                <h3 className={statusClass}>{statusLabel}</h3>
+                <p>Comparison with the reference dataset</p>
+              </article>
+              <article className="metric-card">
+                <span>Total Features</span>
+                <h3>{report.total_features ?? featureResults.length}</h3>
+                <p>Features checked by the drift module</p>
+              </article>
+              <article className="metric-card">
+                <span>Drifted Features</span>
+                <h3>{report.drifted_features ?? 0}</h3>
+                <p>Features identified as drifted</p>
+              </article>
+              <article className="metric-card">
+                <span>Warning Features</span>
+                <h3>{report.warning_features ?? 0}</h3>
+                <p>Features requiring attention</p>
+              </article>
+            </section>
+
+            <h3>Feature-wise drift results</h3>
+            <div className="table-wrapper">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Feature</th>
+                    <th>Status</th>
+                    <th>PSI</th>
+                    <th>p-value</th>
+                    <th>Reference Mean</th>
+                    <th>Current Mean</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {featureResults.map(([feature, values]) => (
+                    <tr key={feature}>
+                      <td>{feature}</td>
+                      <td>{values.status || "—"}</td>
+                      <td>{formatMetric(values.psi)}</td>
+                      <td>{formatMetric(values.p_value)}</td>
+                      <td>{formatMetric(values.reference_mean)}</td>
+                      <td>{formatMetric(values.current_mean)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="info-box">
+              <strong>How to interpret the report</strong>
+              <p>
+                PSI measures the difference between feature distributions.
+                The p-value is the statistical test result returned by the
+                backend. A drift status indicates that the feature's
+                distribution differs from the reference according to the
+                thresholds configured in the Python drift module.
+              </p>
+              <p>
+                A stable result does not prove that model performance or
+                business outcomes are unchanged; it only describes the
+                monitored feature distributions.
+              </p>
+            </div>
+          </>
+        )}
       </section>
     );
   }
@@ -1138,6 +1335,7 @@ function App() {
     if (activePage === "Targeting Comparison") {
       return renderTargetingComparison();
     }
+    if (activePage === "Data Drift") return renderDataDrift();
 
     return renderDashboard();
   }
@@ -1165,7 +1363,7 @@ function App() {
               onClick={() => setActivePage(page)}
             >
               <span className="nav-icon">
-                {["▦", "↑", "◈", "◎", "⌁", "⇄"][index]}
+                {["▦", "↑", "◈", "◎", "⌁", "⇄", "⌁"][index]}
               </span>
               {page}
             </button>

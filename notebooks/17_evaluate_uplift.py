@@ -1,26 +1,46 @@
+
 import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 # ============================================================
-# 1. LOAD DML RESULTS
+# 1. PROJECT PATHS
 # ============================================================
 
-input_path = "data/processed/dml_treatment_effects_v2.csv"
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+input_path = (
+    BASE_DIR
+    / "data"
+    / "processed"
+    / "dml_treatment_effects_v2.csv"
+)
+
+output_dir = BASE_DIR / "data" / "processed"
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# ============================================================
+# 2. LOAD DML RESULTS
+# ============================================================
 
 df = pd.read_csv(input_path)
 
 print("Dataset loaded:", df.shape)
 
-required_columns = [
-    "treatment",
-    "outcome",
+# Your DML CSV uses actual_discount and purchase_outcome.
+# Convert them into treatment and outcome columns.
+
+required_source_columns = [
+    "actual_discount",
+    "purchase_outcome",
     "estimated_treatment_effect"
 ]
 
 missing_columns = [
-    col for col in required_columns
+    col for col in required_source_columns
     if col not in df.columns
 ]
 
@@ -29,17 +49,13 @@ if missing_columns:
         f"Missing required columns: {missing_columns}"
     )
 
-# Remove records with missing required values
-df = df.dropna(subset=required_columns).copy()
-
-# Convert treatment and outcome to numeric values
-df["treatment"] = pd.to_numeric(
-    df["treatment"],
+df["actual_discount"] = pd.to_numeric(
+    df["actual_discount"],
     errors="coerce"
 )
 
-df["outcome"] = pd.to_numeric(
-    df["outcome"],
+df["purchase_outcome"] = pd.to_numeric(
+    df["purchase_outcome"],
     errors="coerce"
 )
 
@@ -48,21 +64,31 @@ df["estimated_treatment_effect"] = pd.to_numeric(
     errors="coerce"
 )
 
-df = df.dropna(subset=required_columns)
+# Treatment: 0 = 10% discount, 1 = 20% discount
+df["treatment"] = (
+    df["actual_discount"] == 20
+).astype(int)
+
+# Outcome: 0 = No purchase, 1 = Purchase
+df["outcome"] = df["purchase_outcome"]
+
+df = df.dropna(
+    subset=[
+        "treatment",
+        "outcome",
+        "estimated_treatment_effect"
+    ]
+).copy()
 
 # ============================================================
-# 2. VALIDATE DATA
+# 3. VALIDATE DATA
 # ============================================================
 
 if not df["treatment"].isin([0, 1]).all():
-    raise ValueError(
-        "Treatment must contain only 0 and 1."
-    )
+    raise ValueError("Treatment must contain only 0 and 1.")
 
 if not df["outcome"].isin([0, 1]).all():
-    raise ValueError(
-        "Outcome must contain only 0 and 1."
-    )
+    raise ValueError("Outcome must contain only 0 and 1.")
 
 df["treatment"] = df["treatment"].astype(int)
 df["outcome"] = df["outcome"].astype(int)
@@ -80,7 +106,7 @@ print("Treated customers:", treated_count)
 print("Control customers:", control_count)
 
 # ============================================================
-# 3. RANK CUSTOMERS BY ESTIMATED TREATMENT EFFECT
+# 4. RANK CUSTOMERS BY ESTIMATED TREATMENT EFFECT
 # ============================================================
 
 df = df.sort_values(
@@ -95,7 +121,7 @@ df["fraction_targeted"] = (
 )
 
 # ============================================================
-# 4. CALCULATE CUMULATIVE UPLIFT
+# 5. CALCULATE CUMULATIVE UPLIFT
 # ============================================================
 
 cumulative_treated = (
@@ -114,7 +140,6 @@ cumulative_control_purchases = (
     (df["treatment"] == 0) & (df["outcome"] == 1)
 ).cumsum()
 
-# Cumulative purchase rates in each group
 treated_rate = (
     cumulative_treated_purchases
     / cumulative_treated.replace(0, np.nan)
@@ -125,30 +150,24 @@ control_rate = (
     / cumulative_control.replace(0, np.nan)
 )
 
-# Difference in purchase rates.
-# This is a descriptive uplift estimate, not a causal
-# effect estimate for each individual customer.
 df["cumulative_uplift"] = (
     treated_rate - control_rate
 )
 
 # ============================================================
-# 5. CREATE QINI-STYLE CURVE DATA
+# 6. CALCULATE QINI-STYLE CURVE
 # ============================================================
-
-# The curve measures the cumulative excess purchases
-# relative to the control purchase rate, scaled by the
-# number of treated customers in the targeted prefix.
-#
-# This is a Qini-style curve; it is not a fully adjusted
-# Qini estimator for unequal treatment probabilities.
 
 df["qini_curve"] = (
     cumulative_treated_purchases
     - cumulative_treated * control_rate
 )
 
-# Set the starting point for the curves
+# Replace undefined values where there are no control
+# observations in the targeted prefix.
+df["qini_curve"] = df["qini_curve"].fillna(0)
+
+# Starting point for both curves
 start_row = pd.DataFrame({
     "customer_rank": [0],
     "fraction_targeted": [0.0],
@@ -172,32 +191,21 @@ curve_data = pd.concat(
 )
 
 # ============================================================
-# 6. CREATE RANDOM TARGETING BASELINE
+# 7. RANDOM TARGETING BASELINE
 # ============================================================
 
-# The random-targeting reference is a straight line
-# from zero to the final Qini-curve value.
-
-final_qini = df["qini_curve"].iloc[-1]
+final_qini = float(df["qini_curve"].iloc[-1])
 
 curve_data["random_targeting"] = (
     curve_data["fraction_targeted"] * final_qini
 )
 
 # ============================================================
-# 7. SAVE CHART DATA FOR REACT
+# 8. SAVE CHART DATA FOR REACT
 # ============================================================
 
-output_dir = "data/processed"
-
-os.makedirs(
-    output_dir,
-    exist_ok=True
-)
-
-output_path = os.path.join(
-    output_dir,
-    "uplift_evaluation_v2.csv"
+output_path = (
+    output_dir / "uplift_evaluation_v2.csv"
 )
 
 curve_data.to_csv(
@@ -208,7 +216,7 @@ curve_data.to_csv(
 print("\nChart data saved to:", output_path)
 
 # ============================================================
-# 8. CREATE QINI CURVE
+# 9. CREATE QINI-STYLE GRAPH
 # ============================================================
 
 plt.figure(figsize=(10, 6))
@@ -234,10 +242,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 
-qini_path = os.path.join(
-    output_dir,
-    "qini_curve_v2.png"
-)
+qini_path = output_dir / "qini_curve_v2.png"
 
 plt.savefig(
     qini_path,
@@ -249,7 +254,7 @@ plt.close()
 print("Qini-style chart saved to:", qini_path)
 
 # ============================================================
-# 9. CREATE UPLIFT CHART
+# 10. CREATE UPLIFT GRAPH
 # ============================================================
 
 plt.figure(figsize=(10, 6))
@@ -274,10 +279,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 
-uplift_path = os.path.join(
-    output_dir,
-    "uplift_chart_v2.png"
-)
+uplift_path = output_dir / "uplift_chart_v2.png"
 
 plt.savefig(
     uplift_path,
@@ -289,7 +291,7 @@ plt.close()
 print("Uplift chart saved to:", uplift_path)
 
 # ============================================================
-# 10. SUMMARY
+# 11. SUMMARY
 # ============================================================
 
 print("\n========== UPLIFT EVALUATION COMPLETE ==========")
@@ -306,7 +308,7 @@ print(
 
 print(
     "Final Qini-style score:",
-    round(float(final_qini), 4)
+    round(final_qini, 4)
 )
 
 print("\nGenerated files:")

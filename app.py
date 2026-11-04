@@ -1,6 +1,5 @@
 
 from pathlib import Path
-from io import BytesIO
 
 import pandas as pd
 from flask import Flask, jsonify, request
@@ -8,537 +7,459 @@ from flask_cors import CORS
 
 from src.drift_detection import detect_data_drift
 
-# --------------------------------------------------
-# Application setup
-# --------------------------------------------------
+
+# ==================================================
+# 1. FLASK APPLICATION SETUP
+# ==================================================
 
 app = Flask(__name__)
 CORS(app)
 
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data" / "processed"
 
-REQUIRED_DML_COLUMNS = {
-    "estimated_treatment_effect"
-}
 
-# --------------------------------------------------
-# Helper functions
-# --------------------------------------------------
+# ==================================================
+# 2. HELPER FUNCTIONS
+# ==================================================
 
 def load_csv(filename):
-    """Load a processed CSV file."""
     file_path = DATA_DIR / filename
 
     if not file_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {filename}")
+        raise FileNotFoundError(
+            f"File not found: {file_path}"
+        )
 
     return pd.read_csv(file_path)
 
 
-def records_from_dataframe(df, limit=100):
-    """Convert a DataFrame to JSON-safe records."""
-    safe_df = df.head(limit).astype(object).where(pd.notna(df), None)
-    return safe_df.to_dict(orient="records")
-
-
 def validate_budget(value):
-    """Validate the supplied budget."""
     try:
         budget = float(value)
     except (TypeError, ValueError):
         raise ValueError("Budget must be a valid number.")
 
-    if not pd.notna(budget) or budget < 0:
-        raise ValueError("Budget must be a non-negative number.")
-
-    if budget == float("inf") or budget == float("-inf"):
-        raise ValueError("Budget must be finite.")
+    if budget < 0:
+        raise ValueError("Budget cannot be negative.")
 
     return budget
 
 
-# --------------------------------------------------
-# Route 1: Health check
-# --------------------------------------------------
+def records_from_dataframe(df, limit=100):
+    clean_df = df.head(limit).copy()
+
+    clean_df = clean_df.astype(object).where(
+        pd.notna(clean_df),
+        None
+    )
+
+    return clean_df.to_dict(orient="records")
+
+
+def validate_csv_upload(file):
+
+    if file is None:
+        raise ValueError("Please select a CSV file.")
+
+    if not file.filename:
+        raise ValueError("Uploaded file has no filename.")
+
+    if not file.filename.lower().endswith(".csv"):
+        raise ValueError("Only CSV files are supported.")
+
+    try:
+        df = pd.read_csv(file)
+
+    except pd.errors.EmptyDataError:
+        raise ValueError("The uploaded CSV file is empty.")
+
+    if df.empty:
+        raise ValueError("The uploaded CSV contains no records.")
+
+    if len(df.columns) != len(set(df.columns)):
+        raise ValueError("The CSV contains duplicate column names.")
+
+    return df
+
+
+# ==================================================
+# 3. HEALTH CHECK
+# ==================================================
 
 @app.route("/api/health", methods=["GET"])
 def health():
+
     return jsonify({
         "status": "success",
-        "message": "EconoCausal backend is running"
-    })
+        "message": "EconoCausal API is running."
+    }), 200
 
 
-# --------------------------------------------------
-# Route 2: DML treatment effects
-# --------------------------------------------------
+# ==================================================
+# 4. TREATMENT EFFECTS
+# ==================================================
 
 @app.route("/api/treatment-effects", methods=["GET"])
 def treatment_effects():
+
     try:
+
         df = load_csv("dml_treatment_effects_v2.csv")
 
         return jsonify({
             "status": "success",
             "total_records": len(df),
-            "columns": df.columns.tolist(),
-            "data": records_from_dataframe(df)
-        })
+            "data": records_from_dataframe(df, 100)
+        }), 200
 
     except FileNotFoundError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
-    except (ValueError, pd.errors.ParserError) as error:
+    except Exception:
+
+        app.logger.exception("Treatment effects error.")
+
         return jsonify({
             "status": "error",
-            "message": str(error)
+            "message": "Unable to load treatment effects."
         }), 500
 
 
-# --------------------------------------------------
-# Route 3: Existing budget optimization results
-# --------------------------------------------------
+# ==================================================
+# 5. BUDGET RESULTS
+# ==================================================
 
 @app.route("/api/budget-results", methods=["GET"])
 def budget_results():
+
     try:
+
         df = load_csv("budget_optimized_customers.csv")
 
         return jsonify({
             "status": "success",
             "total_records": len(df),
-            "columns": df.columns.tolist(),
-            "data": records_from_dataframe(df)
-        })
+            "data": records_from_dataframe(df, 100)
+        }), 200
 
     except FileNotFoundError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
-    except (ValueError, pd.errors.ParserError) as error:
+    except Exception:
+
+        app.logger.exception("Budget results error.")
+
         return jsonify({
             "status": "error",
-            "message": str(error)
+            "message": "Unable to load budget results."
         }), 500
 
 
-# --------------------------------------------------
-# Route 4: Uplift evaluation results
-# --------------------------------------------------
+# ==================================================
+# 6. UPLIFT AND QINI RESULTS
+# ==================================================
 
 @app.route("/api/uplift-results", methods=["GET"])
 def uplift_results():
+
     try:
+
         df = load_csv("uplift_evaluation_v2.csv")
 
+        required_columns = [
+            "customer_rank",
+            "fraction_targeted",
+            "cumulative_uplift",
+            "qini_curve",
+            "random_targeting"
+        ]
+
+        missing = [
+            col for col in required_columns
+            if col not in df.columns
+        ]
+
+        if missing:
+
+            return jsonify({
+                "status": "error",
+                "message": f"Missing columns: {missing}"
+            }), 500
+
+        # Select chart columns
+        df = df[required_columns].copy()
+
+        # Replace NaN values with None
+        df = df.astype(object).where(
+            pd.notna(df),
+            None
+        )
+
+        # Return ALL rows for Plotly charts
         return jsonify({
+
             "status": "success",
+
             "total_records": len(df),
-            "columns": df.columns.tolist(),
-            "data": records_from_dataframe(df)
-        })
+
+            "data": df.to_dict(orient="records")
+
+        }), 200
 
     except FileNotFoundError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
-    except (ValueError, pd.errors.ParserError) as error:
+    except Exception:
+
+        app.logger.exception("Uplift results error.")
+
         return jsonify({
             "status": "error",
-            "message": str(error)
+            "message": "Unable to load uplift results."
         }), 500
 
 
-# --------------------------------------------------
-# Route 5: Upload and validate a campaign CSV
-# --------------------------------------------------
+# ==================================================
+# 7. UPLOAD CAMPAIGN
+# ==================================================
 
 @app.route("/api/upload-campaign", methods=["POST"])
 def upload_campaign():
-    if "file" not in request.files:
-        return jsonify({
-            "status": "error",
-            "message": "No file provided. Upload a CSV using the 'file' field."
-        }), 400
-
-    file = request.files["file"]
-
-    if not file.filename:
-        return jsonify({
-            "status": "error",
-            "message": "Please select a file."
-        }), 400
-
-    if Path(file.filename).suffix.lower() != ".csv":
-        return jsonify({
-            "status": "error",
-            "message": "Only CSV files are supported."
-        }), 400
 
     try:
-        df = pd.read_csv(BytesIO(file.read()))
 
-        if df.empty:
-            return jsonify({
-                "status": "error",
-                "message": "The uploaded CSV has no data rows."
-            }), 400
+        file = request.files.get("file")
 
-        if len(df.columns) == 0:
-            return jsonify({
-                "status": "error",
-                "message": "The uploaded CSV has no columns."
-            }), 400
-
-        if df.columns.duplicated().any():
-            return jsonify({
-                "status": "error",
-                "message": "The CSV contains duplicate column names."
-            }), 400
+        df = validate_csv_upload(file)
 
         return jsonify({
+
             "status": "success",
-            "message": (
-                "CSV uploaded and validated. "
-                "No new treatment-effect predictions have been generated."
-            ),
-            "filename": Path(file.filename).name,
+
+            "message": "Campaign CSV uploaded successfully.",
+
+            "filename": file.filename,
+
             "rows": len(df),
-            "columns": df.columns.tolist(),
-            "preview": records_from_dataframe(df, limit=10)
-        })
 
-    except (UnicodeDecodeError, pd.errors.ParserError, ValueError) as error:
-        return jsonify({
-            "status": "error",
-            "message": f"Could not read the CSV: {error}"
-        }), 400
+            "columns": list(df.columns),
 
-
-# --------------------------------------------------
-# Route 5A: Campaign Data Quality Analysis
-# --------------------------------------------------
-
-@app.route("/api/campaign-data-quality", methods=["POST"])
-def campaign_data_quality():
-    """
-    Analyze an uploaded campaign CSV and return
-    a detailed data quality report.
-    """
-
-    # Step 1: Check whether the request contains a file.
-    if "file" not in request.files:
-        return jsonify({
-            "status": "error",
-            "message": "Please upload a CSV file using the 'file' field."
-        }), 400
-
-    file = request.files["file"]
-
-    # Step 2: Validate the uploaded filename.
-    if not file.filename:
-        return jsonify({
-            "status": "error",
-            "message": "Please select a CSV file."
-        }), 400
-
-    if Path(file.filename).suffix.lower() != ".csv":
-        return jsonify({
-            "status": "error",
-            "message": "Only CSV files are supported."
-        }), 400
-
-    try:
-        # Step 3: Read the CSV without saving it to disk.
-        df = pd.read_csv(BytesIO(file.read()))
-
-        if df.empty:
-            return jsonify({
-                "status": "error",
-                "message": "The uploaded CSV contains no data rows."
-            }), 400
-
-        if len(df.columns) == 0:
-            return jsonify({
-                "status": "error",
-                "message": "The uploaded CSV contains no columns."
-            }), 400
-
-        if df.columns.duplicated().any():
-            return jsonify({
-                "status": "error",
-                "message": "The CSV contains duplicate column names."
-            }), 400
-
-        # Step 4: Calculate dataset overview.
-        total_rows = int(len(df))
-        total_columns = int(len(df.columns))
-        total_cells = total_rows * total_columns
-
-        total_missing = int(df.isna().sum().sum())
-        duplicate_rows = int(df.duplicated().sum())
-
-        completeness = round(
-            ((total_cells - total_missing) / total_cells) * 100,
-            2
-        )
-
-        # Step 5: Report missing values for each column.
-        missing_report = []
-
-        for column in df.columns:
-            missing_count = int(df[column].isna().sum())
-
-            missing_report.append({
-                "column": str(column),
-                "missing_values": missing_count,
-                "missing_percentage": round(
-                    (missing_count / total_rows) * 100,
-                    2
-                )
-            })
-
-        # Step 6: Report column types and unique values.
-        column_information = []
-
-        for column in df.columns:
-            column_information.append({
-                "column": str(column),
-                "data_type": str(df[column].dtype),
-                "unique_values": int(df[column].nunique()),
-                "missing_values": int(df[column].isna().sum())
-            })
-
-        # Step 7: Calculate statistics for numeric columns.
-        numeric_summary = {}
-
-        numeric_columns = df.select_dtypes(
-            include="number"
-        ).columns
-
-        for column in numeric_columns:
-            values = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            ).dropna()
-
-            if values.empty:
-                numeric_summary[str(column)] = {
-                    "count": 0,
-                    "mean": None,
-                    "median": None,
-                    "minimum": None,
-                    "maximum": None
-                }
-                continue
-
-            numeric_summary[str(column)] = {
-                "count": int(values.count()),
-                "mean": round(float(values.mean()), 3),
-                "median": round(float(values.median()), 3),
-                "minimum": float(values.min()),
-                "maximum": float(values.max())
-            }
-
-        # Step 8: Summarize the most common text values.
-        categorical_summary = {}
-
-        categorical_columns = df.select_dtypes(
-            include=["object", "category", "string"]
-        ).columns
-
-        for column in categorical_columns:
-            counts = (
-                df[column]
-                .dropna()
-                .astype(str)
-                .value_counts()
-                .head(5)
-            )
-
-            categorical_summary[str(column)] = [
-                {
-                    "value": str(value),
-                    "count": int(count)
-                }
-                for value, count in counts.items()
-            ]
-
-        # Step 9: Check for common causal modelling columns.
-        available_columns = {
-            str(column).strip().lower()
-            for column in df.columns
-        }
-
-        treatment_candidates = {
-            "treatment", "discount", "treatment_group"
-        }
-
-        outcome_candidates = {
-            "outcome", "purchased", "purchase", "conversion"
-        }
-
-        treatment_found = bool(
-            available_columns & treatment_candidates
-        )
-
-        outcome_found = bool(
-            available_columns & outcome_candidates
-        )
-
-        # Step 10: Generate basic data quality warnings.
-        warnings = []
-
-        if total_missing > 0:
-            warnings.append(
-                "Missing values were found. Review them before modelling."
-            )
-
-        if duplicate_rows > 0:
-            warnings.append(
-                "Duplicate rows were found. Check whether they are valid."
-            )
-
-        if not treatment_found:
-            warnings.append(
-                "No recognized treatment or discount column was found."
-            )
-
-        if not outcome_found:
-            warnings.append(
-                "No recognized purchase or outcome column was found."
-            )
-
-        if not warnings:
-            warnings.append(
-                "No basic data quality issues were detected by these checks."
-            )
-
-        # Step 11: Return the completed report.
-        return jsonify({
-            "status": "success",
-            "message": "Campaign data quality analysis completed.",
-            "filename": Path(file.filename).name,
-
-            "overview": {
-                "total_rows": total_rows,
-                "total_columns": total_columns,
-                "total_missing_values": total_missing,
-                "duplicate_rows": duplicate_rows,
-                "completeness_percentage": completeness
-            },
-
-            "missing_values": missing_report,
-            "column_information": column_information,
-            "numeric_summary": numeric_summary,
-            "categorical_summary": categorical_summary,
-
-            "causal_readiness": {
-                "treatment_column_detected": treatment_found,
-                "outcome_column_detected": outcome_found,
-                "ready_for_causal_model": False,
-                "message": (
-                    "Column-name checks alone cannot establish "
-                    "whether a dataset is suitable for causal inference."
-                )
-            },
-
-            "warnings": warnings
+            "data": records_from_dataframe(df, 20)
 
         }), 200
 
-    except (
-        UnicodeDecodeError,
-        pd.errors.ParserError,
-        pd.errors.EmptyDataError,
-        ValueError
-    ) as error:
+    except ValueError as error:
+
         return jsonify({
             "status": "error",
-            "message": f"Unable to analyze the CSV: {error}"
+            "message": str(error)
         }), 400
 
     except Exception:
-        app.logger.exception("Campaign data quality analysis failed.")
+
+        app.logger.exception("Campaign upload error.")
 
         return jsonify({
             "status": "error",
-            "message": "An unexpected error occurred during CSV analysis."
+            "message": "Unable to process campaign CSV."
         }), 500
 
 
-# --------------------------------------------------
-# End Route 5A
-# --------------------------------------------------
+# ==================================================
+# 8. CAMPAIGN DATA QUALITY
+# ==================================================
+
+@app.route("/api/campaign-data-quality", methods=["POST"])
+def campaign_data_quality():
+
+    try:
+
+        file = request.files.get("file")
+
+        df = validate_csv_upload(file)
+
+        total_cells = int(
+            df.shape[0] * df.shape[1]
+        )
+
+        missing_values = int(
+            df.isnull().sum().sum()
+        )
+
+        duplicate_rows = int(
+            df.duplicated().sum()
+        )
+
+        missing_percentage = (
+            round(missing_values / total_cells * 100, 2)
+            if total_cells > 0 else 0
+        )
+
+        return jsonify({
+
+            "status": "success",
+
+            "filename": file.filename,
+
+            "rows": int(len(df)),
+
+            "columns": int(len(df.columns)),
+
+            "missing_values": missing_values,
+
+            "missing_percentage": missing_percentage,
+
+            "duplicate_rows": duplicate_rows,
+
+            "total_cells": total_cells,
+
+            "column_names": list(df.columns)
+
+        }), 200
+
+    except ValueError as error:
+
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 400
+
+    except Exception:
+
+        app.logger.exception("Campaign data quality error.")
+
+        return jsonify({
+            "status": "error",
+            "message": "Unable to analyze campaign data quality."
+        }), 500
 
 
-# --------------------------------------------------
-# Route 6: Optimize budget using existing DML effects
-# --------------------------------------------------
+# ==================================================
+# 9. BUDGET OPTIMIZATION
+# ==================================================
 
 @app.route("/api/optimize-budget", methods=["POST"])
 def optimize_budget():
+
     payload = request.get_json(silent=True)
 
     if not isinstance(payload, dict) or "budget" not in payload:
+
         return jsonify({
             "status": "error",
-            "message": "Send a JSON object containing 'budget'."
+            "message": "Please provide a budget."
         }), 400
 
     try:
-        budget = validate_budget(payload["budget"])
 
-        # Assumption: higher discount costs an additional $10
-        # per selected customer.
-        extra_discount_cost = 10.0
-        max_customers = int(budget // extra_discount_cost)
+        # Validate budget
+        budget = validate_budget(
+            payload["budget"]
+        )
 
-        df = load_csv("dml_treatment_effects_v2.csv")
+        # Validate incremental cost
+        extra_cost = validate_budget(
+            payload.get("incremental_cost_per_record", 10)
+        )
 
-        missing = REQUIRED_DML_COLUMNS - set(df.columns)
+        if extra_cost <= 0:
+
+            raise ValueError(
+                "Incremental cost per record must be greater than zero."
+            )
+
+        # Load DML predictions
+        df = load_csv(
+            "dml_treatment_effects_v2.csv"
+        )
+
+        required_columns = {
+            "person",
+            "estimated_treatment_effect"
+        }
+
+        missing = required_columns - set(df.columns)
 
         if missing:
+
             return jsonify({
                 "status": "error",
                 "message": (
-                    "DML dataset is missing required columns: "
+                    "Missing DML columns: "
                     + ", ".join(sorted(missing))
                 )
             }), 500
 
+        # Clean treatment effects
         df["estimated_treatment_effect"] = pd.to_numeric(
             df["estimated_treatment_effect"],
             errors="coerce"
         )
 
         df = df.dropna(
-            subset=["estimated_treatment_effect"]
-        )
+            subset=[
+                "person",
+                "estimated_treatment_effect"
+            ]
+        ).copy()
 
-        # Select largest positive estimated effects first.
-        eligible = df[
-            df["estimated_treatment_effect"] > 0
-        ].sort_values(
+        if df.empty:
+
+            return jsonify({
+                "status": "error",
+                "message": "No valid treatment effects found."
+            }), 400
+
+        # Keep one record per customer
+        df = df.sort_values(
             "estimated_treatment_effect",
             ascending=False
         )
 
-        selected = eligible.head(max_customers).copy()
+        df = df.drop_duplicates(
+            subset=["person"],
+            keep="first"
+        ).reset_index(drop=True)
 
+        # Select customers with positive effects
+        eligible = df[
+            df["estimated_treatment_effect"] > 0
+        ].copy()
+
+        # Calculate affordable upgrades
+        max_records = int(
+            budget // extra_cost
+        )
+
+        selected = eligible.head(
+            max_records
+        ).copy()
+
+        # Allocate 20% discount
         selected["recommended_discount"] = 20
-        selected["additional_discount_cost"] = extra_discount_cost
 
+        selected["additional_discount_cost"] = extra_cost
+
+        selected["allocation_reason"] = (
+            "Highest positive estimated incremental effect"
+        )
+
+        # Allocate 10% discount to remaining customers
         selected_indices = set(selected.index)
 
         remaining = df.loc[
@@ -546,218 +467,319 @@ def optimize_budget():
         ].copy()
 
         remaining["recommended_discount"] = 10
+
         remaining["additional_discount_cost"] = 0.0
 
+        remaining["allocation_reason"] = (
+            "Retained at lower discount"
+        )
+
+        # Combine allocations
         allocation = pd.concat(
             [selected, remaining],
             ignore_index=True
         )
 
-        spent = len(selected) * extra_discount_cost
+        # Calculate summary
+        total_records = len(allocation)
 
-        return jsonify({
-            "status": "success",
-            "budget": budget,
-            "additional_discount_cost_per_customer": extra_discount_cost,
-            "customers_selected_for_higher_discount": len(selected),
-            "customers_remaining_at_lower_discount": len(remaining),
-            "budget_spent": spent,
-            "budget_remaining": budget - spent,
-            "sum_selected_estimated_treatment_effects": float(
-                selected["estimated_treatment_effect"].sum()
-            ),
-            "data": records_from_dataframe(
-                allocation.sort_values(
-                    "estimated_treatment_effect",
-                    ascending=False
-                ),
-                limit=100
-            ),
-            "note": (
-                "Uses existing DML estimates. Uploaded campaign data "
-                "is not scored by a trained model."
+        records_at_10 = int(
+            (allocation["recommended_discount"] == 10).sum()
+        )
+
+        records_at_20 = int(
+            (allocation["recommended_discount"] == 20).sum()
+        )
+
+        budget_spent = records_at_20 * extra_cost
+
+        budget_remaining = budget - budget_spent
+
+        estimated_incremental_purchases = float(
+            selected["estimated_treatment_effect"].sum()
+        )
+
+        allocation["effect_rank"] = (
+            allocation["estimated_treatment_effect"]
+            .rank(
+                ascending=False,
+                method="first"
             )
-        })
+            .astype(int)
+        )
+
+        # Allocation matrix
+        allocation_matrix = [
+
+            {
+                "discount": 10,
+                "records_allocated": records_at_10,
+                "additional_cost": 0.0,
+                "total_additional_cost": 0.0
+            },
+
+            {
+                "discount": 20,
+                "records_allocated": records_at_20,
+                "additional_cost": extra_cost,
+                "total_additional_cost": budget_spent
+            }
+
+        ]
+
+        # Save optimized customer allocation
+        allocation_path = (
+            DATA_DIR / "budget_optimized_customers.csv"
+        )
+
+        allocation.sort_values(
+            "effect_rank"
+        ).to_csv(
+            allocation_path,
+            index=False
+        )
+
+        # Return optimization results
+        return jsonify({
+
+            "status": "success",
+
+            "message": "Budget optimization completed.",
+
+            "summary": {
+
+                "total_records": total_records,
+
+                "records_at_10": records_at_10,
+
+                "records_at_20": records_at_20,
+
+                "budget": budget,
+
+                "budget_spent": budget_spent,
+
+                "budget_remaining": budget_remaining,
+
+                "budget_utilization_percentage": round(
+                    (budget_spent / budget * 100)
+                    if budget > 0 else 0,
+                    2
+                ),
+
+                "estimated_incremental_purchases":
+                    estimated_incremental_purchases
+
+            },
+
+            "allocation_matrix": allocation_matrix,
+
+            "cost_assumptions": {
+
+                "incremental_cost_per_record": extra_cost,
+
+                "is_verified_business_cost": False,
+
+                "message": (
+                    "The incremental cost is an assumed input. "
+                    "Replace it with actual incremental discount "
+                    "cost before using this as a business forecast."
+                )
+
+            },
+
+            "data": records_from_dataframe(
+                allocation.sort_values("effect_rank"),
+                limit=100
+            )
+
+        }), 200
 
     except ValueError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 400
 
     except FileNotFoundError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
     except (pd.errors.ParserError, KeyError) as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 500
 
+    except Exception:
 
-# --------------------------------------------------
-# Route 7: Targeting strategy comparison
-# --------------------------------------------------
+        app.logger.exception("Budget optimization failed.")
+
+        return jsonify({
+            "status": "error",
+            "message": "Unexpected budget optimization error."
+        }), 500
+
+
+# ==================================================
+# 10. TARGETING STRATEGY COMPARISON
+# ==================================================
 
 @app.route("/api/targeting-comparison", methods=["GET"])
 def targeting_comparison():
+
     try:
-        df = load_csv("targeting_strategy_comparison.csv")
 
-        required_columns = {
-            "strategy",
-            "customers_selected",
-            "estimated_extra_cost",
-            "estimated_incremental_outcome",
-            "within_budget",
-            "estimated_outcome_per_dollar",
-            "estimated_cost_avoided_vs_blanket"
-        }
-
-        missing = required_columns - set(df.columns)
-
-        if missing:
-            return jsonify({
-                "status": "error",
-                "message": (
-                    "Comparison dataset is missing columns: "
-                    + ", ".join(sorted(missing))
-                )
-            }), 500
+        df = load_csv(
+            "targeting_strategy_comparison.csv"
+        )
 
         return jsonify({
+
             "status": "success",
+
             "total_records": len(df),
-            "columns": df.columns.tolist(),
-            "data": records_from_dataframe(df, limit=100),
-            "note": (
-                "All outcomes and cost comparisons are model-based "
-                "estimates, not verified real-world results."
+
+            "data": records_from_dataframe(
+                df,
+                100
             )
-        })
+
+        }), 200
 
     except FileNotFoundError as error:
+
+        return jsonify({
+            "status": "error",
+            "message": str(error)
+        }), 404
+
+    except Exception:
+
+        app.logger.exception("Targeting comparison error.")
+
+        return jsonify({
+            "status": "error",
+            "message": "Unable to load targeting comparison."
+        }), 500
+
+
+# ==================================================
+# 11. DATA DRIFT DETECTION
+# ==================================================
+
+@app.route("/api/data-drift", methods=["POST"])
+def data_drift():
+
+    try:
+
+        file = request.files.get("file")
+
+        if file is None:
+
+            return jsonify({
+                "status": "error",
+                "message": "Please upload a CSV file."
+            }), 400
+
+        if not file.filename.lower().endswith(".csv"):
+
+            return jsonify({
+                "status": "error",
+                "message": "Only CSV files are supported."
+            }), 400
+
+        uploaded_df = pd.read_csv(file)
+
+        if uploaded_df.empty:
+
+            return jsonify({
+                "status": "error",
+                "message": "Uploaded dataset is empty."
+            }), 400
+
+        reference_df = load_csv(
+            "causal_dataset_synthetic_v2.csv"
+        )
+
+        drift_results = detect_data_drift(
+            reference_df,
+            uploaded_df
+        )
+
+        if isinstance(drift_results, pd.DataFrame):
+
+            drift_results = records_from_dataframe(
+                drift_results,
+                limit=100
+            )
+
+        elif hasattr(drift_results, "to_dict"):
+
+            drift_results = drift_results.to_dict()
+
+        return jsonify({
+
+            "status": "success",
+
+            "message": "Data drift analysis completed.",
+
+            "results": drift_results
+
+        }), 200
+
+    except FileNotFoundError as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
     except (ValueError, pd.errors.ParserError) as error:
+
         return jsonify({
             "status": "error",
             "message": str(error)
-        }), 500
-
-
-# --------------------------------------------------
-# Route 8: Data Drift Detection
-# --------------------------------------------------
-
-@app.route("/api/data-drift", methods=["POST"])
-def data_drift():
-    """
-    Compare an uploaded campaign dataset with the
-    historical reference dataset.
-    """
-
-    if "file" not in request.files:
-        return jsonify({
-            "status": "error",
-            "message": "Please upload a CSV using the 'file' field."
-        }), 400
-
-    file = request.files["file"]
-
-    if not file.filename:
-        return jsonify({
-            "status": "error",
-            "message": "Please select a CSV file."
-        }), 400
-
-    if Path(file.filename).suffix.lower() != ".csv":
-        return jsonify({
-            "status": "error",
-            "message": "Only CSV files are supported."
-        }), 400
-
-    try:
-        current_df = pd.read_csv(BytesIO(file.read()))
-
-        if current_df.empty:
-            return jsonify({
-                "status": "error",
-                "message": "The uploaded CSV contains no data rows."
-            }), 400
-
-        if current_df.columns.duplicated().any():
-            return jsonify({
-                "status": "error",
-                "message": "The CSV contains duplicate column names."
-            }), 400
-
-        reference_filename = "causal_dataset_synthetic_v2.csv"
-        reference_df = load_csv(reference_filename)
-
-        report = detect_data_drift(reference_df, current_df)
-
-        return jsonify({
-            "status": "success",
-            "message": "Data drift analysis completed.",
-            "filename": Path(file.filename).name,
-            "reference_dataset": reference_filename,
-            "report": report
-        }), 200
-
-    except FileNotFoundError as error:
-        return jsonify({
-            "status": "error",
-            "message": str(error)
-        }), 404
-
-    except (
-        UnicodeDecodeError,
-        pd.errors.ParserError,
-        pd.errors.EmptyDataError,
-        ValueError
-    ) as error:
-        return jsonify({
-            "status": "error",
-            "message": f"Unable to perform drift analysis: {error}"
         }), 400
 
     except Exception:
-        app.logger.exception("Data drift analysis failed.")
+
+        app.logger.exception("Data drift detection error.")
+
         return jsonify({
             "status": "error",
-            "message": "An unexpected error occurred during drift analysis."
+            "message": "Unable to perform data drift detection."
         }), 500
 
 
-# --------------------------------------------------
-# End Route 8
-# --------------------------------------------------
-
-
-# --------------------------------------------------
-# Handle oversized uploads
-# --------------------------------------------------
+# ==================================================
+# 12. FILE SIZE ERROR HANDLER
+# ==================================================
 
 @app.errorhandler(413)
-def file_too_large(_error):
+def file_too_large(error):
+
     return jsonify({
+
         "status": "error",
-        "message": "File too large. Maximum upload size is 10 MB."
+
+        "message": (
+            "File too large. Maximum upload size is 10 MB."
+        )
+
     }), 413
 
 
-# --------------------------------------------------
-# Start development server
-# --------------------------------------------------
+# ==================================================
+# 13. RUN APPLICATION
+# ==================================================
 
 if __name__ == "__main__":
+
     app.run(
         host="127.0.0.1",
         port=5000,

@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import Plot from "react-plotly.js";
 import "./App.css";
@@ -6,7 +7,7 @@ const API_BASE_URL = "http://127.0.0.1:5000";
 
 function App() {
   const [budget, setBudget] = useState(5000);
-  const [discount, setDiscount] = useState(20);
+  const [incrementalCost, setIncrementalCost] = useState(10);
   const [fileName, setFileName] = useState("");
   const [activePage, setActivePage] = useState("Dashboard");
 
@@ -43,7 +44,10 @@ function App() {
     "Data Drift",
   ];
 
-  // Load saved model results from the Flask backend.
+  // ==================================================
+  // LOAD MODEL RESULTS
+  // ==================================================
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -77,15 +81,18 @@ function App() {
           .map((row) => ({
             customer_rank: Number(row.customer_rank),
             fraction_targeted: Number(row.fraction_targeted),
+
             cumulative_uplift:
               row.cumulative_uplift == null ||
               row.cumulative_uplift === ""
                 ? null
                 : Number(row.cumulative_uplift),
+
             qini_curve:
               row.qini_curve == null || row.qini_curve === ""
                 ? null
                 : Number(row.qini_curve),
+
             random_targeting:
               row.random_targeting == null ||
               row.random_targeting === ""
@@ -101,16 +108,21 @@ function App() {
         const parsedDml = (dmlResult.data || [])
           .map((row) => ({
             ...row,
+
             estimated_treatment_effect: Number(
               row.estimated_treatment_effect
             ),
+
             true_treatment_effect:
               row.true_treatment_effect == null
                 ? null
                 : Number(row.true_treatment_effect),
+
             treatment:
               row.treatment == null ? null : Number(row.treatment),
-            outcome: row.outcome == null ? null : Number(row.outcome),
+
+            outcome:
+              row.outcome == null ? null : Number(row.outcome),
           }))
           .filter((row) =>
             Number.isFinite(row.estimated_treatment_effect)
@@ -122,6 +134,7 @@ function App() {
 
         setUpliftData(parsedUplift);
         setDmlData(parsedDml);
+
       } catch (error) {
         setDataError(error.message);
       } finally {
@@ -132,8 +145,10 @@ function App() {
     loadData();
   }, []);
 
-  // Load targeting strategy comparison separately so a comparison API
-  // error does not prevent the existing dashboard modules from loading.
+  // ==================================================
+  // LOAD TARGETING COMPARISON
+  // ==================================================
+
   useEffect(() => {
     async function loadComparison() {
       try {
@@ -155,17 +170,23 @@ function App() {
         const parsedRows = (result.data || [])
           .map((row) => ({
             strategy: String(row.strategy || ""),
+
             customers_selected: Number(row.customers_selected),
+
             estimated_extra_cost: Number(row.estimated_extra_cost),
+
             estimated_incremental_outcome: Number(
               row.estimated_incremental_outcome
             ),
+
             within_budget:
               row.within_budget === true ||
               String(row.within_budget).toLowerCase() === "true",
+
             estimated_outcome_per_dollar: Number(
               row.estimated_outcome_per_dollar
             ),
+
             estimated_cost_avoided_vs_blanket: Number(
               row.estimated_cost_avoided_vs_blanket
             ),
@@ -183,6 +204,7 @@ function App() {
         }
 
         setComparisonData(parsedRows);
+
       } catch (error) {
         setComparisonError(
           `${error.message} Check that Flask is running.`
@@ -195,7 +217,10 @@ function App() {
     loadComparison();
   }, []);
 
-  // Upload a selected CSV to Flask.
+  // ==================================================
+  // CAMPAIGN CSV UPLOAD
+  // ==================================================
+
   async function handleFileUpload(event) {
     const file = event.target.files?.[0];
 
@@ -232,6 +257,7 @@ function App() {
 
       setFileName(file.name);
       setUploadResult(result);
+
     } catch (error) {
       setUploadError(
         `${error.message} Check that the Flask backend is running.`
@@ -241,7 +267,10 @@ function App() {
     }
   }
 
-  // Upload a new campaign CSV and compare it with the saved reference dataset.
+  // ==================================================
+  // DATA DRIFT DETECTION
+  // ==================================================
+
   async function handleDataDrift() {
     setDriftError("");
     setDriftResult(null);
@@ -257,10 +286,13 @@ function App() {
     try {
       setDriftLoading(true);
 
-      const response = await fetch(`${API_BASE_URL}/api/data-drift`, {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(
+        `${API_BASE_URL}/api/data-drift`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
       const result = await response.json();
 
@@ -269,6 +301,7 @@ function App() {
       }
 
       setDriftResult(result);
+
     } catch (error) {
       setDriftError(
         `${error.message} Check that the Flask backend is running.`
@@ -278,18 +311,26 @@ function App() {
     }
   }
 
-  // Request budget optimization from Flask.
+  // ==================================================
+  // BUDGET OPTIMIZATION API
+  // ==================================================
+
   async function handleOptimizeBudget() {
     setBudgetError("");
     setBudgetResult(null);
 
-    if (!Number.isFinite(budget) || budget < 0) {
+    const budgetValue = Number(budget);
+    const costValue = Number(incrementalCost);
+
+    if (!Number.isFinite(budgetValue) || budgetValue < 0) {
       setBudgetError("Enter a valid non-negative budget.");
       return;
     }
 
-    if (discount !== 20 && discount !== 10) {
-      setBudgetError("Select a valid discount.");
+    if (!Number.isFinite(costValue) || costValue <= 0) {
+      setBudgetError(
+        "Incremental cost must be greater than zero."
+      );
       return;
     }
 
@@ -300,11 +341,14 @@ function App() {
         `${API_BASE_URL}/api/optimize-budget`,
         {
           method: "POST",
+
           headers: {
             "Content-Type": "application/json",
           },
+
           body: JSON.stringify({
-            budget: discount === 20 ? budget : 0,
+            budget: budgetValue,
+            incremental_cost_per_record: costValue,
           }),
         }
       );
@@ -318,6 +362,7 @@ function App() {
       }
 
       setBudgetResult(result);
+
     } catch (error) {
       setBudgetError(
         `${error.message} Check that the Flask backend is running.`
@@ -326,6 +371,10 @@ function App() {
       setOptimizing(false);
     }
   }
+
+  // ==================================================
+  // DASHBOARD
+  // ==================================================
 
   function renderDashboard() {
     const positiveEffects = dmlData.filter(
@@ -396,17 +445,13 @@ function App() {
         <section className="metric-grid">
           <article className="metric-card">
             <span>Customers Evaluated</span>
-            <h3>
-              {dmlData.length.toLocaleString("en-US")}
-            </h3>
+            <h3>{dmlData.length.toLocaleString("en-US")}</h3>
             <p>Records returned by the backend</p>
           </article>
 
           <article className="metric-card">
             <span>Positive Estimated ITE</span>
-            <h3>
-              {positiveEffects.toLocaleString("en-US")}
-            </h3>
+            <h3>{positiveEffects.toLocaleString("en-US")}</h3>
             <p>Customers with positive estimated effects</p>
           </article>
 
@@ -420,71 +465,26 @@ function App() {
 
           <article className="metric-card">
             <span>Campaign Budget</span>
-            <h3>${budget.toLocaleString("en-US")}</h3>
+            <h3>${Number(budget).toLocaleString("en-US")}</h3>
             <p>Current budget setting</p>
           </article>
         </section>
 
-        <section className="section-heading">
-          <div>
-            <h2>Project Modules</h2>
-            <p>Explore your causal pricing workflow</p>
-          </div>
-        </section>
-
-        <section className="module-grid">
-          {[
-            {
-              title: "Campaign Data",
-              description: "Upload historical campaign CSV data.",
-              icon: "↑",
-            },
-            {
-              title: "Budget Optimization",
-              description: "Configure budgets and discount offers.",
-              icon: "$",
-            },
-            {
-              title: "Causal Analysis",
-              description: "Explore estimated treatment effects.",
-              icon: "◎",
-            },
-            {
-              title: "Uplift Analysis",
-              description: "Inspect uplift and Qini evaluation.",
-              icon: "⌁",
-            },
-            {
-              title: "Targeting Comparison",
-              description: "Compare blanket, causal and random targeting.",
-              icon: "⇄",
-            },
-            {
-              title: "Data Drift",
-              description: "Monitor changes in incoming campaign data.",
-              icon: "⌁",
-            },
-          ].map((module) => (
-            <button
-              className="module-card"
-              key={module.title}
-              onClick={() => setActivePage(module.title)}
-            >
-              <div className="module-icon">{module.icon}</div>
-              <h3>{module.title}</h3>
-              <p>{module.description}</p>
-              <span className="module-arrow">Open module →</span>
-            </button>
-          ))}
-        </section>
       </>
     );
   }
 
+  // ==================================================
+  // CAMPAIGN DATA
+  // ==================================================
+
   function renderCampaignData() {
+    const preview = uploadResult?.data || [];
+
     return (
       <section className="content-card">
         <h2>Historical Campaign Data</h2>
+
         <p>
           Upload a CSV file to send it to the Flask backend for validation.
         </p>
@@ -536,7 +536,7 @@ function App() {
               <p>Columns: {uploadResult.columns?.join(", ")}</p>
             </div>
 
-            {uploadResult.preview?.length > 0 && (
+            {preview.length > 0 && (
               <>
                 <h3>CSV Preview</h3>
 
@@ -551,7 +551,7 @@ function App() {
                     </thead>
 
                     <tbody>
-                      {uploadResult.preview.map((row, index) => (
+                      {preview.map((row, index) => (
                         <tr key={index}>
                           {uploadResult.columns.map((column) => (
                             <td key={column}>
@@ -573,28 +573,25 @@ function App() {
         <div className="info-box">
           <strong>Important</strong>
           <p>
-            The backend validates and previews the uploaded CSV. Uploading
-            does not automatically train the DML model or calculate
-            treatment effects for the new data.
+            The backend validates and previews the uploaded CSV.
+            Uploading does not automatically train the DML model.
           </p>
         </div>
       </section>
     );
   }
 
+  // ==================================================
+  // DATA DRIFT
+  // ==================================================
+
   function renderDataDrift() {
-    const report = driftResult?.report;
+    const report = driftResult?.results;
     const featureResults = report?.results
       ? Object.entries(report.results)
       : [];
 
     const statusLabel = report?.overall_status || "Not analysed";
-    const statusClass =
-      statusLabel === "Stable"
-        ? "drift-status-stable"
-        : statusLabel === "Drift Detected"
-          ? "drift-status-detected"
-          : "drift-status-warning";
 
     const formatMetric = (value) =>
       value == null || !Number.isFinite(Number(value))
@@ -604,6 +601,7 @@ function App() {
     return (
       <section className="content-card">
         <h2>Data Drift Detection</h2>
+
         <p>
           Upload a new campaign CSV to compare its feature distributions
           against the saved reference dataset.
@@ -612,12 +610,15 @@ function App() {
         <label className="upload-area">
           <div className="upload-symbol">↑</div>
           <h3>Choose campaign CSV</h3>
+
           <p>
             {driftFile
               ? `Selected file: ${driftFile.name}`
               : "Select the latest campaign data to analyse."}
           </p>
+
           <span className="upload-button">Browse CSV Files</span>
+
           <input
             type="file"
             accept=".csv,text/csv"
@@ -646,108 +647,115 @@ function App() {
           </div>
         )}
 
-        {driftResult && report && (
+        {driftResult && (
           <>
             <div className="info-box">
               <strong>Analysis completed</strong>
               <p>{driftResult.message}</p>
-              <p>
-                Uploaded file: {driftResult.filename || driftFile?.name}
-              </p>
-              <p>
-                Reference dataset: {driftResult.reference_dataset || "—"}
-              </p>
             </div>
 
-            <section className="metric-grid">
-              <article className="metric-card">
-                <span>Overall Drift Status</span>
-                <h3 className={statusClass}>{statusLabel}</h3>
-                <p>Comparison with the reference dataset</p>
-              </article>
-              <article className="metric-card">
-                <span>Total Features</span>
-                <h3>{report.total_features ?? featureResults.length}</h3>
-                <p>Features checked by the drift module</p>
-              </article>
-              <article className="metric-card">
-                <span>Drifted Features</span>
-                <h3>{report.drifted_features ?? 0}</h3>
-                <p>Features identified as drifted</p>
-              </article>
-              <article className="metric-card">
-                <span>Warning Features</span>
-                <h3>{report.warning_features ?? 0}</h3>
-                <p>Features requiring attention</p>
-              </article>
-            </section>
+            {report && (
+              <>
+                <section className="metric-grid">
+                  <article className="metric-card">
+                    <span>Overall Drift Status</span>
+                    <h3>{statusLabel}</h3>
+                  </article>
 
-            <h3>Feature-wise drift results</h3>
-            <div className="table-wrapper">
-              <table className="results-table">
-                <thead>
-                  <tr>
-                    <th>Feature</th>
-                    <th>Status</th>
-                    <th>PSI</th>
-                    <th>p-value</th>
-                    <th>Reference Mean</th>
-                    <th>Current Mean</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {featureResults.map(([feature, values]) => (
-                    <tr key={feature}>
-                      <td>{feature}</td>
-                      <td>{values.status || "—"}</td>
-                      <td>{formatMetric(values.psi)}</td>
-                      <td>{formatMetric(values.p_value)}</td>
-                      <td>{formatMetric(values.reference_mean)}</td>
-                      <td>{formatMetric(values.current_mean)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  <article className="metric-card">
+                    <span>Total Features</span>
+                    <h3>
+                      {report.total_features ?? featureResults.length}
+                    </h3>
+                  </article>
 
-            <div className="info-box">
-              <strong>How to interpret the report</strong>
-              <p>
-                PSI measures the difference between feature distributions.
-                The p-value is the statistical test result returned by the
-                backend. A drift status indicates that the feature's
-                distribution differs from the reference according to the
-                thresholds configured in the Python drift module.
-              </p>
-              <p>
-                A stable result does not prove that model performance or
-                business outcomes are unchanged; it only describes the
-                monitored feature distributions.
-              </p>
-            </div>
+                  <article className="metric-card">
+                    <span>Drifted Features</span>
+                    <h3>{report.drifted_features ?? 0}</h3>
+                  </article>
+
+                  <article className="metric-card">
+                    <span>Warning Features</span>
+                    <h3>{report.warning_features ?? 0}</h3>
+                  </article>
+                </section>
+
+                {featureResults.length > 0 && (
+                  <>
+                    <h3>Feature-wise drift results</h3>
+
+                    <div className="table-wrapper">
+                      <table className="results-table">
+                        <thead>
+                          <tr>
+                            <th>Feature</th>
+                            <th>Status</th>
+                            <th>PSI</th>
+                            <th>p-value</th>
+                            <th>Reference Mean</th>
+                            <th>Current Mean</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {featureResults.map(([feature, values]) => (
+                            <tr key={feature}>
+                              <td>{feature}</td>
+                              <td>{values.status || "—"}</td>
+                              <td>{formatMetric(values.psi)}</td>
+                              <td>{formatMetric(values.p_value)}</td>
+                              <td>{formatMetric(values.reference_mean)}</td>
+                              <td>{formatMetric(values.current_mean)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
       </section>
     );
   }
 
+  // ==================================================
+  // BUDGET OPTIMIZATION
+  // ==================================================
+
   function renderBudgetOptimization() {
+    const summary = budgetResult?.summary;
+    const allocation = budgetResult?.allocation_matrix || [];
+
+    const formatMoney = (value) =>
+      `$${Number(value || 0).toLocaleString("en-US", {
+        maximumFractionDigits: 2,
+      })}`;
+
     return (
       <section className="content-card">
         <h2>Budget Optimization</h2>
-        <p>Configure your promotional campaign constraints.</p>
+
+        <p>
+          Allocate promotional budgets using individual treatment
+          effects estimated by the DML model.
+        </p>
 
         <div className="settings-grid">
           <div className="input-group">
-            <label htmlFor="budget">Total campaign budget ($)</label>
+            <label htmlFor="budget">
+              Total Campaign Budget ($)
+            </label>
+
             <input
               id="budget"
               type="number"
               min="0"
               value={budget}
               onChange={(event) => {
-                const value = event.target.value;
-                setBudget(value === "" ? 0 : Math.max(0, Number(value)));
+                setBudget(event.target.value);
                 setBudgetResult(null);
                 setBudgetError("");
               }}
@@ -755,32 +763,32 @@ function App() {
           </div>
 
           <div className="input-group">
-            <label htmlFor="discount">Discount offer</label>
-            <select
-              id="discount"
-              value={discount}
+            <label htmlFor="incrementalCost">
+              Additional Cost Per Upgrade ($)
+            </label>
+
+            <input
+              id="incrementalCost"
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={incrementalCost}
               onChange={(event) => {
-                setDiscount(Number(event.target.value));
+                setIncrementalCost(event.target.value);
                 setBudgetResult(null);
                 setBudgetError("");
               }}
-            >
-              <option value={10}>$10 Discount</option>
-              <option value={20}>$20 Discount</option>
-            </select>
+            />
           </div>
         </div>
 
-        <div className="budget-preview">
-          <div>
-            <span>Available budget</span>
-            <strong>${budget.toLocaleString("en-US")}</strong>
-          </div>
-
-          <div>
-            <span>Selected discount</span>
-            <strong>${discount}</strong>
-          </div>
+        <div className="info-box">
+          <strong>Discount allocation strategy</strong>
+          <p>
+            The optimizer compares 10% and 20% discounts.
+            Customers with the highest positive estimated
+            treatment effects are prioritized for the 20% offer.
+          </p>
         </div>
 
         <button
@@ -788,7 +796,7 @@ function App() {
           onClick={handleOptimizeBudget}
           disabled={optimizing}
         >
-          {optimizing ? "Optimizing..." : "Optimize Budget"}
+          {optimizing ? "Optimizing Budget..." : "Optimize Budget"}
         </button>
 
         {budgetError && (
@@ -798,128 +806,255 @@ function App() {
           </div>
         )}
 
-        {budgetResult && (
+        {summary && (
           <>
             <section className="section-heading">
               <div>
                 <h2>Optimization Results</h2>
                 <p>Results returned by the Python backend</p>
               </div>
+
+              <span className="sample-badge">
+                OPTIMIZATION COMPLETE
+              </span>
             </section>
 
             <section className="metric-grid">
               <article className="metric-card">
-                <span>Customers Selected for Higher Discount</span>
+                <span>Total Customers</span>
                 <h3>
-                  {budgetResult.customers_selected_for_higher_discount}
+                  {Number(summary.total_records).toLocaleString("en-US")}
                 </h3>
-              </article>
-
-              <article className="metric-card">
-                <span>Customers at Lower Discount</span>
-                <h3>
-                  {budgetResult.customers_remaining_at_lower_discount}
-                </h3>
+                <p>Unique customers evaluated</p>
               </article>
 
               <article className="metric-card">
                 <span>Budget Spent</span>
-                <h3>
-                  ${Number(budgetResult.budget_spent).toLocaleString("en-US")}
-                </h3>
+                <h3>{formatMoney(summary.budget_spent)}</h3>
+                <p>Assumed additional discount cost</p>
               </article>
 
               <article className="metric-card">
                 <span>Budget Remaining</span>
+                <h3>{formatMoney(summary.budget_remaining)}</h3>
+                <p>Unallocated budget</p>
+              </article>
+
+              <article className="metric-card">
+                <span>Estimated Incremental Purchases</span>
                 <h3>
-                  $
-                  {Number(budgetResult.budget_remaining).toLocaleString(
-                    "en-US"
-                  )}
+                  {Number(
+                    summary.estimated_incremental_purchases
+                  ).toFixed(2)}
                 </h3>
+                <p>Model-estimated incremental outcomes</p>
               </article>
             </section>
 
-            <div className="info-box">
-              <strong>Interpretation</strong>
-              <p>
-                {budgetResult.note}
-              </p>
-              <p>
-                The optimizer assumes an additional cost of $
-                {budgetResult.additional_discount_cost_per_customer} per
-                customer selected for the higher discount. Estimated
-                treatment effects are model outputs, not guaranteed revenue.
-              </p>
-              <p>
-                The selected discount control determines whether the budget
-                is sent to the optimizer; the current Python optimizer
-                specifically models the additional cost of moving from
-                a $10 discount to a $20 discount.
-              </p>
+            <section className="metric-grid">
+              <article className="metric-card">
+                <span>Customers at 10%</span>
+                <h3>
+                  {Number(summary.records_at_10).toLocaleString("en-US")}
+                </h3>
+                <p>Retained at lower discount</p>
+              </article>
+
+              <article className="metric-card">
+                <span>Customers at 20%</span>
+                <h3>
+                  {Number(summary.records_at_20).toLocaleString("en-US")}
+                </h3>
+                <p>Selected for higher discount</p>
+              </article>
+
+              <article className="metric-card">
+                <span>Budget Utilization</span>
+                <h3>
+                  {Number(
+                    summary.budget_utilization_percentage
+                  ).toFixed(2)}%
+                </h3>
+                <p>Percentage of budget allocated</p>
+              </article>
+
+              <article className="metric-card">
+                <span>Additional Cost Per Upgrade</span>
+                <h3>
+                  {formatMoney(
+                    budgetResult.cost_assumptions
+                      ?.incremental_cost_per_record
+                  )}
+                </h3>
+                <p>Assumed cost input</p>
+              </article>
+            </section>
+
+            <h3>Budget Utilization</h3>
+
+            <div className="chart-placeholder">
+              <Plot
+                data={[
+                  {
+                    labels: ["Budget Spent", "Budget Remaining"],
+                    values: [
+                      Number(summary.budget_spent),
+                      Number(summary.budget_remaining),
+                    ],
+                    type: "pie",
+                    hole: 0.55,
+                    textinfo: "label+percent",
+                    hovertemplate:
+                      "%{label}: $%{value:,.2f}<extra></extra>",
+                  },
+                ]}
+                layout={{
+                  autosize: true,
+                  title: "Campaign Budget Allocation",
+                  paper_bgcolor: "rgba(0,0,0,0)",
+                  plot_bgcolor: "rgba(0,0,0,0)",
+                  font: { color: "#dce5f5" },
+                  margin: { t: 50, r: 20, b: 30, l: 20 },
+                  showlegend: true,
+                }}
+                useResizeHandler
+                style={{ width: "100%", height: "350px" }}
+                config={{ responsive: true, displaylogo: false }}
+              />
             </div>
 
-            {budgetResult.data?.length > 0 && (
-              <>
-                <h3>Customer Allocation Preview</h3>
+            <h3>Customer Discount Allocation</h3>
 
-                <div className="table-wrapper">
-                  <table className="results-table">
-                    <thead>
-                      <tr>
-                        <th>Age</th>
-                        <th>Income</th>
-                        <th>Estimated ITE</th>
-                        <th>Recommended Discount</th>
-                        <th>Additional Cost</th>
+            <div className="chart-placeholder">
+              <Plot
+                data={[
+                  {
+                    x: allocation.map(
+                      (row) => `${row.discount}% Discount`
+                    ),
+                    y: allocation.map(
+                      (row) => row.records_allocated
+                    ),
+                    type: "bar",
+                    text: allocation.map(
+                      (row) => row.records_allocated
+                    ),
+                    textposition: "auto",
+                    hovertemplate:
+                      "%{x}<br>Customers: %{y}<extra></extra>",
+                  },
+                ]}
+                layout={{
+                  autosize: true,
+                  title: "Customers by Recommended Discount",
+                  paper_bgcolor: "rgba(0,0,0,0)",
+                  plot_bgcolor: "rgba(0,0,0,0)",
+                  font: { color: "#dce5f5" },
+                  margin: { t: 50, r: 20, b: 60, l: 60 },
+                  xaxis: { title: "Discount level" },
+                  yaxis: {
+                    title: "Number of customers",
+                    gridcolor: "rgba(148,163,184,0.15)",
+                  },
+                }}
+                useResizeHandler
+                style={{ width: "100%", height: "350px" }}
+                config={{ responsive: true, displaylogo: false }}
+              />
+            </div>
+
+            <h3>Allocation Summary</h3>
+
+            <div className="table-wrapper">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Discount</th>
+                    <th>Customers</th>
+                    <th>Additional Cost Per Customer</th>
+                    <th>Total Additional Cost</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {allocation.map((row) => (
+                    <tr key={row.discount}>
+                      <td>{row.discount}%</td>
+                      <td>
+                        {Number(row.records_allocated).toLocaleString("en-US")}
+                      </td>
+                      <td>{formatMoney(row.additional_cost)}</td>
+                      <td>{formatMoney(row.total_additional_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Recommended Customer Allocation</h3>
+
+            <p>
+              Top 20 customers from the optimized allocation,
+              ordered by estimated treatment effect.
+            </p>
+
+            <div className="table-wrapper">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>Customer ID</th>
+                    <th>Age</th>
+                    <th>Income</th>
+                    <th>Estimated ITE</th>
+                    <th>Recommended Discount</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(budgetResult.data || [])
+                    .slice(0, 20)
+                    .map((row, index) => (
+                      <tr key={`${row.person}-${index}`}>
+                        <td>{row.effect_rank ?? index + 1}</td>
+                        <td>{row.person ?? "—"}</td>
+                        <td>{row.age ?? "—"}</td>
+                        <td>
+                          {row.income == null
+                            ? "—"
+                            : Number(row.income).toLocaleString("en-US")}
+                        </td>
+                        <td>
+                          {Number(
+                            row.estimated_treatment_effect
+                          ).toFixed(4)}
+                        </td>
+                        <td>{row.recommended_discount}%</td>
                       </tr>
-                    </thead>
+                    ))}
+                </tbody>
+              </table>
+            </div>
 
-                    <tbody>
-                      {budgetResult.data.slice(0, 20).map((row, index) => (
-                        <tr key={index}>
-                          <td>{row.age ?? "—"}</td>
-                          <td>{row.income ?? "—"}</td>
-                          <td>
-                            {Number.isFinite(
-                              Number(row.estimated_treatment_effect)
-                            )
-                              ? Number(
-                                  row.estimated_treatment_effect
-                                ).toFixed(4)
-                              : "—"}
-                          </td>
-                          <td>
-                            {row.recommended_discount == null
-                              ? "—"
-                              : `$${row.recommended_discount}`}
-                          </td>
-                          <td>
-                            {row.additional_discount_cost == null
-                              ? "—"
-                              : `$${row.additional_discount_cost}`}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
+            <div className="info-box">
+              <strong>Important business assumption</strong>
+              <p>
+                {budgetResult.cost_assumptions?.message}
+              </p>
+              <p>
+                Estimated incremental purchases are model-based
+                estimates, not guaranteed purchases or revenue.
+              </p>
+            </div>
           </>
         )}
-
-        <div className="info-box">
-          <strong>Optimization assumption</strong>
-          <p>
-            This optimizer uses saved DML estimates and assumes a $10
-            incremental cost for the higher discount. It does not retrain
-            the model or score uploaded campaign data.
-          </p>
-        </div>
       </section>
     );
   }
+
+  // ==================================================
+  // CAUSAL ANALYSIS
+  // ==================================================
 
   function renderCausalAnalysis() {
     const topCustomers = [...dmlData]
@@ -932,6 +1067,7 @@ function App() {
     return (
       <section className="content-card">
         <h2>Causal Analysis</h2>
+
         <p>
           Explore individual treatment effects estimated using EconML
           Double Machine Learning.
@@ -1006,6 +1142,10 @@ function App() {
       </section>
     );
   }
+
+  // ==================================================
+  // UPLIFT ANALYSIS
+  // ==================================================
 
   function renderUpliftAnalysis() {
     if (loading) {
@@ -1142,21 +1282,25 @@ function App() {
             The charts visualize saved evaluation values. The Qini-style
             evaluation remains preliminary until its calculation is
             validated against an appropriate uplift-evaluation method.
-            Missing cumulative-uplift values are omitted rather than
-            replaced with zero.
           </p>
         </div>
       </section>
     );
   }
 
+  // ==================================================
+  // TARGETING COMPARISON
+  // ==================================================
+
   function renderTargetingComparison() {
     const blanket = comparisonData.find(
       (row) => row.strategy.toLowerCase().includes("blanket")
     );
+
     const causal = comparisonData.find(
       (row) => row.strategy.toLowerCase().includes("causal")
     );
+
     const random = comparisonData.find(
       (row) => row.strategy.toLowerCase().includes("random")
     );
@@ -1181,18 +1325,19 @@ function App() {
           random.estimated_incremental_outcome
         : null;
 
-    const chartRows = comparisonData;
-
     return (
       <section className="content-card">
         <h2>Targeting Strategy Comparison</h2>
+
         <p>
           Compare model-estimated outcomes and assumed additional costs
           across blanket, causal and random targeting.
         </p>
 
         {comparisonLoading ? (
-          <div className="info-box">Loading targeting comparison...</div>
+          <div className="info-box">
+            Loading targeting comparison...
+          </div>
         ) : comparisonError ? (
           <div className="info-box">
             <strong>Unable to load comparison</strong>
@@ -1233,6 +1378,7 @@ function App() {
             </section>
 
             <h3>Strategy results</h3>
+
             <div className="table-wrapper">
               <table className="results-table">
                 <thead>
@@ -1245,6 +1391,7 @@ function App() {
                     <th>Within Budget</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {comparisonData.map((row) => (
                     <tr key={row.strategy}>
@@ -1267,12 +1414,13 @@ function App() {
             </div>
 
             <h3>Estimated incremental outcome by strategy</h3>
+
             <div className="chart-placeholder">
               <Plot
                 data={[
                   {
-                    x: chartRows.map((row) => row.strategy),
-                    y: chartRows.map(
+                    x: comparisonData.map((row) => row.strategy),
+                    y: comparisonData.map(
                       (row) => row.estimated_incremental_outcome
                     ),
                     type: "bar",
@@ -1288,10 +1436,7 @@ function App() {
                   plot_bgcolor: "rgba(0,0,0,0)",
                   font: { color: "#dce5f5" },
                   margin: { t: 50, r: 25, b: 80, l: 65 },
-                  xaxis: {
-                    title: "Targeting strategy",
-                    gridcolor: "rgba(148,163,184,0.15)",
-                  },
+                  xaxis: { title: "Targeting strategy" },
                   yaxis: {
                     title: "Estimated incremental outcome",
                     gridcolor: "rgba(148,163,184,0.15)",
@@ -1310,13 +1455,6 @@ function App() {
                 comparison dataset. They are not verified purchases,
                 revenue, profit or realized savings.
               </p>
-              <p>
-                The cost comparison assumes an additional $10 cost for
-                each customer receiving the higher discount. The blanket
-                strategy applies that higher discount to every evaluated
-                customer, while causal and random targeting select
-                budget-matched groups.
-              </p>
             </div>
           </>
         )}
@@ -1324,27 +1462,48 @@ function App() {
     );
   }
 
+  // ==================================================
+  // PAGE ROUTING
+  // ==================================================
+
   function renderPage() {
     if (activePage === "Dashboard") return renderDashboard();
+
     if (activePage === "Campaign Data") return renderCampaignData();
+
     if (activePage === "Budget Optimization") {
       return renderBudgetOptimization();
     }
-    if (activePage === "Causal Analysis") return renderCausalAnalysis();
-    if (activePage === "Uplift Analysis") return renderUpliftAnalysis();
+
+    if (activePage === "Causal Analysis") {
+      return renderCausalAnalysis();
+    }
+
+    if (activePage === "Uplift Analysis") {
+      return renderUpliftAnalysis();
+    }
+
     if (activePage === "Targeting Comparison") {
       return renderTargetingComparison();
     }
-    if (activePage === "Data Drift") return renderDataDrift();
+
+    if (activePage === "Data Drift") {
+      return renderDataDrift();
+    }
 
     return renderDashboard();
   }
+
+  // ==================================================
+  // MAIN APPLICATION UI
+  // ==================================================
 
   return (
     <div className="app-container">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-icon">E</div>
+
           <div>
             <h2>EconoCausal</h2>
             <p>CAUSAL AI PLATFORM</p>
@@ -1365,6 +1524,7 @@ function App() {
               <span className="nav-icon">
                 {["▦", "↑", "◈", "◎", "⌁", "⇄", "⌁"][index]}
               </span>
+
               {page}
             </button>
           ))}
@@ -1372,6 +1532,7 @@ function App() {
 
         <div className="sidebar-bottom">
           <div className="status-dot"></div>
+
           <div>
             <strong>Model Workspace</strong>
             <span>Linear Double ML</span>
@@ -1398,7 +1559,9 @@ function App() {
               <div className="eyebrow">
                 ECONOMICS × MACHINE LEARNING
               </div>
+
               <h1>{activePage}</h1>
+
               <p>
                 Optimize promotional strategies using causal machine
                 learning.
@@ -1412,7 +1575,9 @@ function App() {
 
           <footer className="footer">
             <span>EconoCausal</span>
-            <span>Dynamic Pricing via Double Machine Learning</span>
+            <span>
+              Dynamic Pricing via Double Machine Learning
+            </span>
           </footer>
         </div>
       </main>

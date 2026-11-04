@@ -1,26 +1,58 @@
+
 import pandas as pd
 import numpy as np
 
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from pathlib import Path
 from econml.dml import LinearDML
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    RandomForestClassifier
+)
+from sklearn.model_selection import train_test_split
 
-# Step 1: Load the synthetic dataset
+# --------------------------------------------------
+# 1. Paths
+# --------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data" / "processed"
+
+# --------------------------------------------------
+# 2. Load dataset
+# --------------------------------------------------
+
 df = pd.read_csv(
-    "data/processed/causal_dataset_synthetic.csv"
+    DATA_DIR / "causal_dataset_synthetic_v2.csv"
 )
 
 print("Dataset loaded:", df.shape)
 
-# Step 2: Define treatment and outcome
-# T = 0 means $10 discount
-# T = 1 means $20 discount
+# --------------------------------------------------
+# 3. Keep 10% and 20% discounts
+# --------------------------------------------------
+
+df = df[
+    df["discount_amount"].isin([10, 20])
+].copy()
+
+df = df.dropna(
+    subset=["discount_amount", "purchase"]
+)
+
+# --------------------------------------------------
+# 4. Treatment and outcome
+# --------------------------------------------------
+
+# 0 = 10% discount
+# 1 = 20% discount
+
 T = (df["discount_amount"] == 20).astype(int)
+Y = df["purchase"].astype(int)
 
-# Outcome: 0 = no purchase, 1 = purchase
-Y = df["purchase"]
+# --------------------------------------------------
+# 5. Customer features
+# --------------------------------------------------
 
-# Step 3: Select customer features
 feature_columns = [
     "age",
     "income",
@@ -29,23 +61,28 @@ feature_columns = [
 ]
 
 X = df[feature_columns].copy()
-
-# Handle any missing values
 X = X.fillna(X.median())
 
-print("\nFeatures:", feature_columns)
-print("Treatment distribution:")
+print("\nTreatment distribution:")
 print(T.value_counts())
 
-# Step 4: Split the dataset
-X_train, X_test, T_train, T_test, Y_train, Y_test = train_test_split(
-    X, T, Y,
-    test_size=0.2,
-    random_state=42,
-    stratify=T
+# --------------------------------------------------
+# 6. Train-test split
+# --------------------------------------------------
+
+X_train, X_test, T_train, T_test, Y_train, Y_test = (
+    train_test_split(
+        X, T, Y,
+        test_size=0.2,
+        random_state=42,
+        stratify=T
+    )
 )
 
-# Step 5: Create the DML model
+# --------------------------------------------------
+# 7. Train DML model
+# --------------------------------------------------
+
 model = LinearDML(
     model_y=RandomForestRegressor(
         n_estimators=100,
@@ -61,7 +98,6 @@ model = LinearDML(
     random_state=42
 )
 
-# Step 6: Train the model
 model.fit(
     Y_train,
     T_train,
@@ -70,22 +106,78 @@ model.fit(
 
 print("\nDML model trained successfully!")
 
-# Step 7: Estimate treatment effects
+# --------------------------------------------------
+# 8. Estimate treatment effects
+# --------------------------------------------------
+
 effects = model.effect(X_test)
 
-print("\nEstimated treatment effects:")
-print("Mean effect:", np.mean(effects))
-print("Minimum effect:", np.min(effects))
-print("Maximum effect:", np.max(effects))
+print("\nTreatment effect summary:")
+print("Mean:", np.mean(effects))
+print("Minimum:", np.min(effects))
+print("Maximum:", np.max(effects))
 
-# Step 8: Save customer-level estimates
+# --------------------------------------------------
+# 9. Prepare customer-level results
+# --------------------------------------------------
+
 results = X_test.copy()
-results["estimated_treatment_effect"] = effects
 
-results.to_csv(
-    "data/processed/dml_treatment_effects.csv",
-    index=False
+results["person"] = df.loc[X_test.index, "person"].values
+
+results["actual_discount"] = (
+    df.loc[X_test.index, "discount_amount"].values
 )
 
+results["purchase_outcome"] = (
+    df.loc[X_test.index, "purchase"].values
+)
+
+results["estimated_treatment_effect"] = effects
+
+# Positive effect means estimated benefit
+# from upgrading from 10% to 20%.
+
+results["incremental_purchase_probability"] = effects
+
+# Keep recommendation based on estimated effect.
+results["recommended_discount"] = np.where(
+    effects > 0, 20, 10
+)
+
+# Rank customers by incremental estimated effect.
+results["effect_rank"] = (
+    results["estimated_treatment_effect"]
+    .rank(ascending=False, method="first")
+    .astype(int)
+)
+
+# --------------------------------------------------
+# 10. Save results
+# --------------------------------------------------
+
+output_file = (
+    DATA_DIR / "dml_treatment_effects_v2.csv"
+)
+
+results.to_csv(output_file, index=False)
+
 print("\nTreatment effects saved successfully!")
-print("File: data/processed/dml_treatment_effects.csv")
+print("Output:", output_file)
+
+print("\nFinal output shape:", results.shape)
+
+print("\nRecommended discount distribution:")
+print(results["recommended_discount"].value_counts())
+
+print("\nTop 10 customers:")
+print(
+    results[
+        [
+            "person",
+            "estimated_treatment_effect",
+            "recommended_discount",
+            "effect_rank"
+        ]
+    ].head(10)
+)

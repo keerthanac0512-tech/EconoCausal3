@@ -350,7 +350,7 @@ def campaign_data_quality():
 
 
 # ==================================================
-# 9. BUDGET OPTIMIZATION
+# 9. BUDGET / DISCOUNT STRATEGY ANALYSIS
 # ==================================================
 
 @app.route("/api/optimize-budget", methods=["POST"])
@@ -359,34 +359,16 @@ def optimize_budget():
     payload = request.get_json(silent=True)
 
     if not isinstance(payload, dict) or "budget" not in payload:
-
         return jsonify({
             "status": "error",
             "message": "Please provide a budget."
         }), 400
 
     try:
+        budget = validate_budget(payload["budget"])
 
-        # Validate budget
-        budget = validate_budget(
-            payload["budget"]
-        )
-
-        # Validate incremental cost
-        extra_cost = validate_budget(
-            payload.get("incremental_cost_per_record", 10)
-        )
-
-        if extra_cost <= 0:
-
-            raise ValueError(
-                "Incremental cost per record must be greater than zero."
-            )
-
-        # Load DML predictions
-        df = load_csv(
-            "dml_treatment_effects_v2.csv"
-        )
+        # Load customer-level DML treatment effects.
+        df = load_csv("dml_treatment_effects_v2.csv")
 
         required_columns = {
             "person",
@@ -396,7 +378,6 @@ def optimize_budget():
         missing = required_columns - set(df.columns)
 
         if missing:
-
             return jsonify({
                 "status": "error",
                 "message": (
@@ -405,223 +386,160 @@ def optimize_budget():
                 )
             }), 500
 
-        # Clean treatment effects
         df["estimated_treatment_effect"] = pd.to_numeric(
             df["estimated_treatment_effect"],
             errors="coerce"
         )
 
         df = df.dropna(
-            subset=[
-                "person",
-                "estimated_treatment_effect"
-            ]
+            subset=["person", "estimated_treatment_effect"]
         ).copy()
 
         if df.empty:
-
             return jsonify({
                 "status": "error",
                 "message": "No valid treatment effects found."
             }), 400
 
-        # Keep one record per customer
-        df = df.sort_values(
-            "estimated_treatment_effect",
-            ascending=False
-        )
-
-        df = df.drop_duplicates(
-            subset=["person"],
-            keep="first"
-        ).reset_index(drop=True)
-
-        # Select customers with positive effects
-        eligible = df[
-            df["estimated_treatment_effect"] > 0
-        ].copy()
-
-        # Calculate affordable upgrades
-        max_records = int(
-            budget // extra_cost
-        )
-
-        selected = eligible.head(
-            max_records
-        ).copy()
-
-        # Allocate 20% discount
-        selected["recommended_discount"] = 20
-
-        selected["additional_discount_cost"] = extra_cost
-
-        selected["allocation_reason"] = (
-            "Highest positive estimated incremental effect"
-        )
-
-        # Allocate 10% discount to remaining customers
-        selected_indices = set(selected.index)
-
-        remaining = df.loc[
-            ~df.index.isin(selected_indices)
-        ].copy()
-
-        remaining["recommended_discount"] = 10
-
-        remaining["additional_discount_cost"] = 0.0
-
-        remaining["allocation_reason"] = (
-            "Retained at lower discount"
-        )
-
-        # Combine allocations
-        allocation = pd.concat(
-            [selected, remaining],
-            ignore_index=True
-        )
-
-        # Calculate summary
-        total_records = len(allocation)
-
-        records_at_10 = int(
-            (allocation["recommended_discount"] == 10).sum()
-        )
-
-        records_at_20 = int(
-            (allocation["recommended_discount"] == 20).sum()
-        )
-
-        budget_spent = records_at_20 * extra_cost
-
-        budget_remaining = budget - budget_spent
-
-        estimated_incremental_purchases = float(
-            selected["estimated_treatment_effect"].sum()
-        )
-
-        allocation["effect_rank"] = (
-            allocation["estimated_treatment_effect"]
-            .rank(
-                ascending=False,
-                method="first"
+        # Keep one prediction per customer and rank by estimated ITE.
+        df = (
+            df.sort_values(
+                "estimated_treatment_effect",
+                ascending=False
             )
+            .drop_duplicates(subset=["person"], keep="first")
+            .reset_index(drop=True)
+        )
+
+        # Positive ITE means the 20% discount is estimated to perform
+        # better than the 10% discount for that customer.
+        df["recommended_discount"] = (
+            df["estimated_treatment_effect"]
+            .apply(lambda effect: 20 if effect > 0 else 10)
+        )
+
+        df["allocation_reason"] = df[
+            "estimated_treatment_effect"
+        ].apply(
+            lambda effect: (
+                "Positive estimated effect: 20% is preferred over 10%"
+                if effect > 0
+                else "No positive estimated benefit from upgrading to 20%"
+            )
+        )
+
+        df["effect_rank"] = (
+            df["estimated_treatment_effect"]
+            .rank(ascending=False, method="first")
             .astype(int)
         )
 
-        # Allocation matrix
-        allocation_matrix = [
+        records_at_20 = int(
+            (df["recommended_discount"] == 20).sum()
+        )
+        records_at_10 = int(
+            (df["recommended_discount"] == 10).sum()
+        )
 
+        # The sum of positive ITEs is a model-based expected incremental
+        # purchase count versus assigning those same customers 10%.
+        estimated_incremental_purchases = float(
+            df.loc[
+                df["recommended_discount"] == 20,
+                "estimated_treatment_effect"
+            ].sum()
+        )
+
+        allocation_matrix = [
             {
                 "discount": 10,
                 "records_allocated": records_at_10,
-                "additional_cost": 0.0,
-                "total_additional_cost": 0.0
+                "mean_estimated_treatment_effect": (
+                    float(
+                        df.loc[
+                            df["recommended_discount"] == 10,
+                            "estimated_treatment_effect"
+                        ].mean()
+                    )
+                    if records_at_10 else 0.0
+                )
             },
-
             {
                 "discount": 20,
                 "records_allocated": records_at_20,
-                "additional_cost": extra_cost,
-                "total_additional_cost": budget_spent
+                "mean_estimated_treatment_effect": (
+                    float(
+                        df.loc[
+                            df["recommended_discount"] == 20,
+                            "estimated_treatment_effect"
+                        ].mean()
+                    )
+                    if records_at_20 else 0.0
+                )
             }
-
         ]
 
-        # Save optimized customer allocation
-        allocation_path = (
-            DATA_DIR / "budget_optimized_customers.csv"
-        )
-
-        allocation.sort_values(
-            "effect_rank"
-        ).to_csv(
+        # Save the recommended customer-level allocation.
+        allocation_path = DATA_DIR / "budget_optimized_customers.csv"
+        df.sort_values("effect_rank").to_csv(
             allocation_path,
             index=False
         )
 
-        # Return optimization results
         return jsonify({
-
             "status": "success",
-
-            "message": "Budget optimization completed.",
-
+            "message": "Discount strategy analysis completed.",
             "summary": {
-
-                "total_records": total_records,
-
+                "total_records": int(len(df)),
                 "records_at_10": records_at_10,
-
                 "records_at_20": records_at_20,
-
-                "budget": budget,
-
-                "budget_spent": budget_spent,
-
-                "budget_remaining": budget_remaining,
-
-                "budget_utilization_percentage": round(
-                    (budget_spent / budget * 100)
-                    if budget > 0 else 0,
-                    2
-                ),
-
-                "estimated_incremental_purchases":
+                "budget_reference": budget,
+                "estimated_incremental_purchases": (
                     estimated_incremental_purchases
-
-            },
-
-            "allocation_matrix": allocation_matrix,
-
-            "cost_assumptions": {
-
-                "incremental_cost_per_record": extra_cost,
-
-                "is_verified_business_cost": False,
-
-                "message": (
-                    "The incremental cost is an assumed input. "
-                    "Replace it with actual incremental discount "
-                    "cost before using this as a business forecast."
                 )
-
             },
-
+            "allocation_matrix": allocation_matrix,
+            "budget_note": (
+                "The entered budget is retained as a planning reference. "
+                "It is not used to cap customer allocation because this "
+                "dataset has no order value, purchase amount, or verified "
+                "discount-cost column."
+            ),
+            "effect_note": (
+                "Estimated treatment effect is the model-estimated change "
+                "in purchase probability when moving from a 10% discount "
+                "to a 20% discount. The summed positive effects are an "
+                "expected incremental outcome estimate, not guaranteed sales."
+            ),
             "data": records_from_dataframe(
-                allocation.sort_values("effect_rank"),
+                df.sort_values("effect_rank"),
                 limit=100
             )
-
         }), 200
 
     except ValueError as error:
-
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 400
 
     except FileNotFoundError as error:
-
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 404
 
     except (pd.errors.ParserError, KeyError) as error:
-
         return jsonify({
             "status": "error",
             "message": str(error)
         }), 500
 
     except Exception:
-
-        app.logger.exception("Budget optimization failed.")
-
+        app.logger.exception("Discount strategy analysis failed.")
         return jsonify({
             "status": "error",
-            "message": "Unexpected budget optimization error."
+            "message": "Unexpected discount strategy analysis error."
         }), 500
 
 

@@ -7,7 +7,6 @@ const API_BASE_URL = "http://127.0.0.1:5000";
 
 function App() {
   const [budget, setBudget] = useState(5000);
-  const [incrementalCost, setIncrementalCost] = useState(10);
   const [fileName, setFileName] = useState("");
   const [activePage, setActivePage] = useState("Dashboard");
 
@@ -170,32 +169,15 @@ function App() {
         const parsedRows = (result.data || [])
           .map((row) => ({
             strategy: String(row.strategy || ""),
-
             customers_selected: Number(row.customers_selected),
-
-            estimated_extra_cost: Number(row.estimated_extra_cost),
-
             estimated_incremental_outcome: Number(
               row.estimated_incremental_outcome
-            ),
-
-            within_budget:
-              row.within_budget === true ||
-              String(row.within_budget).toLowerCase() === "true",
-
-            estimated_outcome_per_dollar: Number(
-              row.estimated_outcome_per_dollar
-            ),
-
-            estimated_cost_avoided_vs_blanket: Number(
-              row.estimated_cost_avoided_vs_blanket
             ),
           }))
           .filter(
             (row) =>
               row.strategy &&
               Number.isFinite(row.customers_selected) &&
-              Number.isFinite(row.estimated_extra_cost) &&
               Number.isFinite(row.estimated_incremental_outcome)
           );
 
@@ -320,17 +302,8 @@ function App() {
     setBudgetResult(null);
 
     const budgetValue = Number(budget);
-    const costValue = Number(incrementalCost);
-
     if (!Number.isFinite(budgetValue) || budgetValue < 0) {
       setBudgetError("Enter a valid non-negative budget.");
-      return;
-    }
-
-    if (!Number.isFinite(costValue) || costValue <= 0) {
-      setBudgetError(
-        "Incremental cost must be greater than zero."
-      );
       return;
     }
 
@@ -348,7 +321,6 @@ function App() {
 
           body: JSON.stringify({
             budget: budgetValue,
-            incremental_cost_per_record: costValue,
           }),
         }
       );
@@ -729,24 +701,19 @@ function App() {
     const summary = budgetResult?.summary;
     const allocation = budgetResult?.allocation_matrix || [];
 
-    const formatMoney = (value) =>
-      `$${Number(value || 0).toLocaleString("en-US", {
-        maximumFractionDigits: 2,
-      })}`;
-
     return (
       <section className="content-card">
-        <h2>Budget Optimization</h2>
+        <h2>Budget and Discount Strategy Analysis</h2>
 
         <p>
-          Allocate promotional budgets using individual treatment
-          effects estimated by the DML model.
+          Compare the estimated response to 10% and 20% discounts
+          using customer-level treatment effects from the DML model.
         </p>
 
         <div className="settings-grid">
           <div className="input-group">
             <label htmlFor="budget">
-              Total Campaign Budget ($)
+              Campaign Budget Reference ($)
             </label>
 
             <input
@@ -761,33 +728,19 @@ function App() {
               }}
             />
           </div>
-
-          <div className="input-group">
-            <label htmlFor="incrementalCost">
-              Additional Cost Per Upgrade ($)
-            </label>
-
-            <input
-              id="incrementalCost"
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={incrementalCost}
-              onChange={(event) => {
-                setIncrementalCost(event.target.value);
-                setBudgetResult(null);
-                setBudgetError("");
-              }}
-            />
-          </div>
         </div>
 
         <div className="info-box">
-          <strong>Discount allocation strategy</strong>
+          <strong>How the recommendation works</strong>
           <p>
-            The optimizer compares 10% and 20% discounts.
-            Customers with the highest positive estimated
-            treatment effects are prioritized for the 20% offer.
+            Customers with a positive estimated treatment effect are
+            recommended for the 20% discount. Customers with a zero or
+            negative effect are recommended to remain at 10%.
+          </p>
+          <p>
+            The budget is shown as a planning reference only. Without
+            order value or verified discount-cost data, it cannot
+            determine how many customers the campaign can afford to target.
           </p>
         </div>
 
@@ -796,12 +749,12 @@ function App() {
           onClick={handleOptimizeBudget}
           disabled={optimizing}
         >
-          {optimizing ? "Optimizing Budget..." : "Optimize Budget"}
+          {optimizing ? "Analysing discounts..." : "Compare Discount Strategies"}
         </button>
 
         {budgetError && (
           <div className="info-box">
-            <strong>Optimization failed</strong>
+            <strong>Analysis failed</strong>
             <p>{budgetError}</p>
           </div>
         )}
@@ -810,120 +763,60 @@ function App() {
           <>
             <section className="section-heading">
               <div>
-                <h2>Optimization Results</h2>
-                <p>Results returned by the Python backend</p>
+                <h2>Discount Strategy Results</h2>
+                <p>Customer recommendations based on estimated ITE</p>
               </div>
 
               <span className="sample-badge">
-                OPTIMIZATION COMPLETE
+                ANALYSIS COMPLETE
               </span>
             </section>
 
             <section className="metric-grid">
               <article className="metric-card">
-                <span>Total Customers</span>
+                <span>Customers Evaluated</span>
                 <h3>
                   {Number(summary.total_records).toLocaleString("en-US")}
                 </h3>
-                <p>Unique customers evaluated</p>
+                <p>Unique customers with valid DML estimates</p>
               </article>
 
               <article className="metric-card">
-                <span>Budget Spent</span>
-                <h3>{formatMoney(summary.budget_spent)}</h3>
-                <p>Assumed additional discount cost</p>
+                <span>Recommended for 10%</span>
+                <h3>
+                  {Number(summary.records_at_10).toLocaleString("en-US")}
+                </h3>
+                <p>No positive estimated benefit from upgrading</p>
               </article>
 
               <article className="metric-card">
-                <span>Budget Remaining</span>
-                <h3>{formatMoney(summary.budget_remaining)}</h3>
-                <p>Unallocated budget</p>
+                <span>Recommended for 20%</span>
+                <h3>
+                  {Number(summary.records_at_20).toLocaleString("en-US")}
+                </h3>
+                <p>Positive estimated benefit from upgrading</p>
               </article>
 
               <article className="metric-card">
                 <span>Estimated Incremental Purchases</span>
                 <h3>
                   {Number(
-                    summary.estimated_incremental_purchases
+                    summary.estimated_incremental_purchases || 0
                   ).toFixed(2)}
                 </h3>
-                <p>Model-estimated incremental outcomes</p>
+                <p>Expected difference versus giving selected customers 10%</p>
               </article>
             </section>
 
-            <section className="metric-grid">
-              <article className="metric-card">
-                <span>Customers at 10%</span>
-                <h3>
-                  {Number(summary.records_at_10).toLocaleString("en-US")}
-                </h3>
-                <p>Retained at lower discount</p>
-              </article>
-
-              <article className="metric-card">
-                <span>Customers at 20%</span>
-                <h3>
-                  {Number(summary.records_at_20).toLocaleString("en-US")}
-                </h3>
-                <p>Selected for higher discount</p>
-              </article>
-
-              <article className="metric-card">
-                <span>Budget Utilization</span>
-                <h3>
-                  {Number(
-                    summary.budget_utilization_percentage
-                  ).toFixed(2)}%
-                </h3>
-                <p>Percentage of budget allocated</p>
-              </article>
-
-              <article className="metric-card">
-                <span>Additional Cost Per Upgrade</span>
-                <h3>
-                  {formatMoney(
-                    budgetResult.cost_assumptions
-                      ?.incremental_cost_per_record
-                  )}
-                </h3>
-                <p>Assumed cost input</p>
-              </article>
-            </section>
-
-            <h3>Budget Utilization</h3>
-
-            <div className="chart-placeholder">
-              <Plot
-                data={[
-                  {
-                    labels: ["Budget Spent", "Budget Remaining"],
-                    values: [
-                      Number(summary.budget_spent),
-                      Number(summary.budget_remaining),
-                    ],
-                    type: "pie",
-                    hole: 0.55,
-                    textinfo: "label+percent",
-                    hovertemplate:
-                      "%{label}: $%{value:,.2f}<extra></extra>",
-                  },
-                ]}
-                layout={{
-                  autosize: true,
-                  title: "Campaign Budget Allocation",
-                  paper_bgcolor: "rgba(0,0,0,0)",
-                  plot_bgcolor: "rgba(0,0,0,0)",
-                  font: { color: "#dce5f5" },
-                  margin: { t: 50, r: 20, b: 30, l: 20 },
-                  showlegend: true,
-                }}
-                useResizeHandler
-                style={{ width: "100%", height: "350px" }}
-                config={{ responsive: true, displaylogo: false }}
-              />
+            <div className="info-box">
+              <strong>Budget reference</strong>
+              <p>
+                ${Number(summary.budget_reference || 0).toLocaleString("en-US")}
+              </p>
+              <p>{budgetResult.budget_note}</p>
             </div>
 
-            <h3>Customer Discount Allocation</h3>
+            <h3>Customers by Recommended Discount</h3>
 
             <div className="chart-placeholder">
               <Plot
@@ -946,12 +839,12 @@ function App() {
                 ]}
                 layout={{
                   autosize: true,
-                  title: "Customers by Recommended Discount",
+                  title: "Customer Recommendations by Discount",
                   paper_bgcolor: "rgba(0,0,0,0)",
                   plot_bgcolor: "rgba(0,0,0,0)",
                   font: { color: "#dce5f5" },
                   margin: { t: 50, r: 20, b: 60, l: 60 },
-                  xaxis: { title: "Discount level" },
+                  xaxis: { title: "Recommended discount" },
                   yaxis: {
                     title: "Number of customers",
                     gridcolor: "rgba(148,163,184,0.15)",
@@ -969,10 +862,9 @@ function App() {
               <table className="results-table">
                 <thead>
                   <tr>
-                    <th>Discount</th>
+                    <th>Recommended Discount</th>
                     <th>Customers</th>
-                    <th>Additional Cost Per Customer</th>
-                    <th>Total Additional Cost</th>
+                    <th>Mean Estimated ITE</th>
                   </tr>
                 </thead>
 
@@ -983,8 +875,11 @@ function App() {
                       <td>
                         {Number(row.records_allocated).toLocaleString("en-US")}
                       </td>
-                      <td>{formatMoney(row.additional_cost)}</td>
-                      <td>{formatMoney(row.total_additional_cost)}</td>
+                      <td>
+                        {Number(
+                          row.mean_estimated_treatment_effect || 0
+                        ).toFixed(4)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -994,8 +889,7 @@ function App() {
             <h3>Recommended Customer Allocation</h3>
 
             <p>
-              Top 20 customers from the optimized allocation,
-              ordered by estimated treatment effect.
+              Top 20 customers ordered by estimated treatment effect.
             </p>
 
             <div className="table-wrapper">
@@ -1008,6 +902,7 @@ function App() {
                     <th>Income</th>
                     <th>Estimated ITE</th>
                     <th>Recommended Discount</th>
+                    <th>Reason</th>
                   </tr>
                 </thead>
 
@@ -1030,6 +925,7 @@ function App() {
                           ).toFixed(4)}
                         </td>
                         <td>{row.recommended_discount}%</td>
+                        <td>{row.allocation_reason ?? "—"}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -1037,13 +933,13 @@ function App() {
             </div>
 
             <div className="info-box">
-              <strong>Important business assumption</strong>
+              <strong>Interpretation and limitation</strong>
+              <p>{budgetResult.effect_note}</p>
               <p>
-                {budgetResult.cost_assumptions?.message}
-              </p>
-              <p>
-                Estimated incremental purchases are model-based
-                estimates, not guaranteed purchases or revenue.
+                The estimated incremental purchase figure is a model-based
+                expected outcome, not a guaranteed number of purchases.
+                This analysis does not calculate discount expenditure,
+                revenue, profit, ROI, or budget utilization.
               </p>
             </div>
           </>
@@ -1293,45 +1189,16 @@ function App() {
   // ==================================================
 
   function renderTargetingComparison() {
-    const blanket = comparisonData.find(
-      (row) => row.strategy.toLowerCase().includes("blanket")
-    );
-
-    const causal = comparisonData.find(
-      (row) => row.strategy.toLowerCase().includes("causal")
-    );
-
-    const random = comparisonData.find(
-      (row) => row.strategy.toLowerCase().includes("random")
-    );
-
-    const formatMoney = (value) =>
-      Number.isFinite(value)
-        ? `$${value.toLocaleString("en-US", {
-            maximumFractionDigits: 2,
-          })}`
-        : "—";
-
     const formatNumber = (value) =>
       Number.isFinite(value) ? value.toFixed(4) : "—";
-
-    const costDifference = causal
-      ? causal.estimated_cost_avoided_vs_blanket
-      : null;
-
-    const causalVsRandom =
-      causal && random
-        ? causal.estimated_incremental_outcome -
-          random.estimated_incremental_outcome
-        : null;
 
     return (
       <section className="content-card">
         <h2>Targeting Strategy Comparison</h2>
 
         <p>
-          Compare model-estimated outcomes and assumed additional costs
-          across blanket, causal and random targeting.
+          Compare model-estimated incremental outcomes across blanket,
+          causal and random targeting strategies.
         </p>
 
         {comparisonLoading ? (
@@ -1345,38 +1212,6 @@ function App() {
           </div>
         ) : (
           <>
-            <section className="metric-grid">
-              <article className="metric-card">
-                <span>Blanket Targeting Cost</span>
-                <h3>{formatMoney(blanket?.estimated_extra_cost)}</h3>
-                <p>
-                  {blanket?.customers_selected.toLocaleString("en-US") ?? "—"}{" "}
-                  customers selected
-                </p>
-              </article>
-
-              <article className="metric-card">
-                <span>Causal Targeting Cost</span>
-                <h3>{formatMoney(causal?.estimated_extra_cost)}</h3>
-                <p>
-                  {causal?.customers_selected.toLocaleString("en-US") ?? "—"}{" "}
-                  customers selected
-                </p>
-              </article>
-
-              <article className="metric-card">
-                <span>Estimated Cost Difference vs Blanket</span>
-                <h3>{formatMoney(costDifference)}</h3>
-                <p>Based on the comparison dataset's cost assumption</p>
-              </article>
-
-              <article className="metric-card">
-                <span>Causal vs Random Estimated Outcome</span>
-                <h3>{formatNumber(causalVsRandom)}</h3>
-                <p>Difference in estimated incremental outcomes</p>
-              </article>
-            </section>
-
             <h3>Strategy results</h3>
 
             <div className="table-wrapper">
@@ -1385,10 +1220,7 @@ function App() {
                   <tr>
                     <th>Strategy</th>
                     <th>Customers Selected</th>
-                    <th>Estimated Additional Cost</th>
                     <th>Estimated Incremental Outcome</th>
-                    <th>Outcome per Dollar</th>
-                    <th>Within Budget</th>
                   </tr>
                 </thead>
 
@@ -1399,14 +1231,9 @@ function App() {
                       <td>
                         {row.customers_selected.toLocaleString("en-US")}
                       </td>
-                      <td>{formatMoney(row.estimated_extra_cost)}</td>
                       <td>
                         {formatNumber(row.estimated_incremental_outcome)}
                       </td>
-                      <td>
-                        {formatNumber(row.estimated_outcome_per_dollar)}
-                      </td>
-                      <td>{row.within_budget ? "Yes" : "No"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1449,11 +1276,11 @@ function App() {
             </div>
 
             <div className="info-box">
-              <strong>How to interpret these results</strong>
+              <strong>Interpretation</strong>
               <p>
-                These values are model-based estimates from the saved
-                comparison dataset. They are not verified purchases,
-                revenue, profit or realized savings.
+                These are model-based estimated outcomes from the saved
+                comparison file. They are not verified purchases, revenue,
+                profit, realized savings, or discount expenditure.
               </p>
             </div>
           </>

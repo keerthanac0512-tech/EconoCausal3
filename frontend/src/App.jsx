@@ -44,6 +44,32 @@ function App() {
   ];
 
   // ==================================================
+  // DYNAMIC TARGETING BUSINESS INSIGHTS
+  // ==================================================
+
+  function getTargetingInsights() {
+    if (!comparisonData.length) return null;
+
+    const sortedStrategies = [...comparisonData].sort(
+      (a, b) =>
+        b.estimated_incremental_outcome -
+        a.estimated_incremental_outcome
+    );
+
+    const best = sortedStrategies[0];
+    const lowest = sortedStrategies[sortedStrategies.length - 1];
+
+    return {
+      bestStrategy: best,
+      lowestStrategy: lowest,
+      difference:
+        best.estimated_incremental_outcome -
+        lowest.estimated_incremental_outcome,
+      customerCount: best.customers_selected,
+    };
+  }
+
+  // ==================================================
   // LOAD MODEL RESULTS
   // ==================================================
 
@@ -442,6 +468,40 @@ function App() {
           </article>
         </section>
 
+        <section className="content-card">
+          <h2>Business Insights</h2>
+
+          {loading ? (
+            <p>Calculating business insights...</p>
+          ) : dmlData.length > 0 ? (
+            <>
+              <p>
+                The DML model evaluated{" "}
+                {dmlData.length.toLocaleString("en-US")} customers.
+                {" "}
+                {positiveEffects.toLocaleString("en-US")} customers have
+                positive estimated treatment effects.
+              </p>
+
+              <p>
+                {positiveEffects > 0
+                  ? `${positiveEffects.toLocaleString("en-US")} customers show a positive estimated response to treatment. They are potential candidates for targeted promotional offers.`
+                  : "No customers currently have a positive estimated treatment effect. Review the model results before assigning promotional offers."}
+              </p>
+
+              <p>
+                The mean estimated treatment effect is{" "}
+                {meanEffect === null ? "not available" : meanEffect.toFixed(4)}.
+                This is a model estimate, not a guaranteed increase in purchases.
+              </p>
+            </>
+          ) : (
+            <p>
+              Business insights will appear when model results are loaded.
+            </p>
+          )}
+        </section>
+
       </>
     );
   }
@@ -807,6 +867,33 @@ function App() {
                 <p>Expected difference versus giving selected customers 10%</p>
               </article>
             </section>
+
+            <div className="info-box">
+              <strong>Automatic Discount Allocation Insights</strong>
+
+              <p>
+                Out of {Number(summary.total_records).toLocaleString("en-US")}
+                {" "}evaluated customers,{" "}
+                {Number(summary.records_at_20).toLocaleString("en-US")}
+                {" "}are recommended for a 20% discount and{" "}
+                {Number(summary.records_at_10).toLocaleString("en-US")}
+                {" "}are recommended for a 10% discount.
+              </p>
+
+              <p>
+                Customers with positive estimated treatment effects are
+                assigned the 20% recommendation. Customers with zero or
+                negative estimated effects are assigned 10%.
+              </p>
+
+              <p>
+                Estimated incremental purchases are{" "}
+                {Number(
+                  summary.estimated_incremental_purchases || 0
+                ).toFixed(2)}.
+                This is a model-based estimate, not a guaranteed result.
+              </p>
+            </div>
 
             <div className="info-box">
               <strong>Budget reference</strong>
@@ -1239,6 +1326,44 @@ function App() {
                 </tbody>
               </table>
             </div>
+
+            {(() => {
+              const insights = getTargetingInsights();
+
+              if (!insights) return null;
+
+              return (
+                <div className="info-box">
+                  <strong>Automatic Business Insights</strong>
+
+                  <p>
+                    <strong>{insights.bestStrategy.strategy}</strong>{" "}
+                    has the highest estimated incremental outcome among
+                    the strategies in this comparison.
+                  </p>
+
+                  <p>
+                    Its estimated incremental outcome is{" "}
+                    {insights.bestStrategy.estimated_incremental_outcome.toFixed(4)}.
+                  </p>
+
+                  <p>
+                    The difference between the highest and lowest estimated
+                    outcomes is {insights.difference.toFixed(4)}.
+                  </p>
+
+                  <p>
+                    The highest-outcome strategy selects{" "}
+                    {insights.customerCount.toLocaleString("en-US")} customers.
+                  </p>
+
+                  <p>
+                    This comparison uses model-estimated outcomes, not
+                    verified purchases, revenue, or profit.
+                  </p>
+                </div>
+              );
+            })()}
 
             <h3>Estimated incremental outcome by strategy</h3>
 
